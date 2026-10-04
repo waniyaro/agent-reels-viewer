@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Agent Reels Viewer Cache & Outputs
+output/
+cache/
+*.mp4
+*.m4a
+*.mp3
+*.wav
+*.jpg
+*.jpeg
+*.png
+
+# Cookies and sensitive data
+*.cookies.txt
+cookies.txt
+.env
+
+# OS
+.DS_Store
+Thumbs.db

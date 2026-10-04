@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-reels-viewer"
+version = "0.1.0"
+description = "Lightweight multimodal agent skill to inspect and understand Instagram Reels, TikTok, and YouTube Shorts (audio + keyframes + timeline)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "waniyaro" }
+]
+keywords = [
+    "ai-agent",
+    "claude-code",
+    "antigravity",
+    "openclaw",
+    "mcp",
+    "instagram-reels",
+    "tiktok",
+    "youtube-shorts",
+    "multimodal",
+    "transcription",
+    "video-understanding"
+]
+dependencies = [
+    "yt-dlp>=2024.08.06",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+audio = [
+    "faster-whisper>=1.0.0",
+]
+dedup = [
+    "imagehash>=4.3.1",
+]
+all = [
+    "faster-whisper>=1.0.0",
+    "imagehash>=4.3.1",
+]
+
+[project.scripts]
+agent-reels-viewer = "scripts.viewer:main"

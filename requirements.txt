@@ -1,0 +1,9 @@
+# Core media download & extraction
+yt-dlp>=2024.08.06
+
+# Transcription (optional but recommended)
+faster-whisper>=1.0.0
+
+# Image processing & perceptual hashing (for smart keyframe deduplication)
+Pillow>=10.0.0
+imagehash>=4.3.1
