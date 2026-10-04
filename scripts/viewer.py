@@ -123,16 +123,19 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         transcription_status=transcription_status,
     )
 
-    # Step 6: Cleanup raw video to preserve user disk space (unless --keep-video requested)
-    if not args.keep_video and not os.path.exists(args.url):
+    # Step 6: Video retention (retained for second-pass zooming, cleaned via 'clean' command)
+    if args.no_video and not os.path.exists(args.url):
         try:
             if video_path and os.path.exists(video_path):
                 os.remove(video_path)
+                video_path = None
         except OSError:
             pass
 
+    session_id = os.path.basename(output_dir)
     res = {
         "status": "success",
+        "session_id": session_id,
         "platform": detect_platform(url),
         "author": meta.get("uploader") or "Unknown",
         "duration": meta.get("duration"),
@@ -140,6 +143,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         "frames_extracted": len(keyframes),
         "output_dir": output_dir,
         "timeline_path": timeline_path,
+        "video_path": video_path,
         "meta_path": os.path.join(output_dir, "meta.json"),
     }
 
@@ -156,13 +160,39 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 def cmd_frames(args: argparse.Namespace) -> int:
     """Second-pass on-demand frame zooming."""
-    video_path = args.video_path
-    if not os.path.exists(video_path):
-        res = {"status": "error", "error_code": "FILE_NOT_FOUND", "message": f"Video file {video_path} not found"}
+    target = args.target.strip()
+    video_path = None
+    output_dir = None
+
+    if os.path.isfile(target):
+        video_path = os.path.abspath(target)
+        output_dir = args.output if args.output else os.path.dirname(video_path)
+    elif os.path.isdir(target):
+        output_dir = os.path.abspath(target)
+        # Search for video in folder
+        for f in os.listdir(output_dir):
+            if f.endswith((".mp4", ".mkv", ".webm")):
+                video_path = os.path.join(output_dir, f)
+                break
+    else:
+        # Check if target is a session name in output/
+        cand = os.path.abspath(os.path.join("output", target))
+        if os.path.isdir(cand):
+            output_dir = cand
+            for f in os.listdir(output_dir):
+                if f.endswith((".mp4", ".mkv", ".webm")):
+                    video_path = os.path.join(output_dir, f)
+                    break
+
+    if not video_path or not os.path.exists(video_path):
+        res = {
+            "status": "error",
+            "error_code": "VIDEO_NOT_FOUND",
+            "message": f"Could not find video file for '{target}'. If it was cleaned up, rerun 'inspect' first.",
+        }
         print(json.dumps(res) if args.json else f"❌ {res['message']}", file=sys.stderr)
         return 1
 
-    output_dir = args.output if args.output else os.path.dirname(video_path)
     frames = extract_range_frames(
         video_path,
         start_sec=args.from_sec,
@@ -221,13 +251,13 @@ def main():
     p_inspect.add_argument("--mode", choices=["quick", "standard", "deep"], default="standard", help="Inspection depth")
     p_inspect.add_argument("--cookies", help="Path to cookies.txt for authenticated extraction")
     p_inspect.add_argument("--output", help="Custom output directory")
-    p_inspect.add_argument("--keep-video", action="store_true", help="Retain original downloaded MP4")
+    p_inspect.add_argument("--no-video", action="store_true", help="Immediately delete original video file to save disk space")
     p_inspect.add_argument("--json", action="store_true", help="Output compact JSON for agent integration")
     p_inspect.set_defaults(func=cmd_inspect)
 
     # frames (second-pass zoom)
     p_frames = subparsers.add_parser("frames", help="Extract high-density or hi-res frames for a specific time window")
-    p_frames.add_argument("video_path", help="Path to downloaded video file")
+    p_frames.add_argument("target", help="Session folder (e.g. output/session_xxx), session ID, or direct path to video file")
     p_frames.add_argument("--from-sec", type=float, required=True, help="Start time in seconds")
     p_frames.add_argument("--to-sec", type=float, required=True, help="End time in seconds")
     p_frames.add_argument("--count", type=int, default=6, help="Number of frames to extract")

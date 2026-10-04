@@ -117,17 +117,19 @@ def fetch_metadata(
         if proc.returncode != 0:
             stderr = proc.stderr.lower()
             if "login required" in stderr or "checkpoint" in stderr or "rate-limit" in stderr:
-                return None, "NEEDS_COOKIES"
-            elif "not found" in stderr or "private" in stderr or "removed" in stderr:
-                return None, "PRIVATE_OR_REMOVED"
-            return None, f"FETCH_META_FAILED: {proc.stderr.strip()[:200]}"
+                return None, "NEEDS_COOKIES: Instagram/TikTok login required. Use --cookies path/to/cookies.txt"
+            elif "not found" in stderr or "private" in stderr or "removed" in stderr or "not available" in stderr:
+                return None, "PRIVATE_VIDEO: Video is private, age-restricted, not available, or removed by creator"
+            elif "unsupported url" in stderr:
+                return None, "INVALID_URL: The provided URL is not recognized by extractor"
+            return None, f"EXTRACTOR_BROKEN: Failed to parse video metadata. Try updating yt-dlp (`yt-dlp -U`): {proc.stderr.strip()[:180]}"
 
         meta = json.loads(proc.stdout)
         
         # Check duration
         duration = meta.get("duration")
         if duration and duration > MAX_DURATION_SECONDS:
-            return None, f"VIDEO_TOO_LONG: Video is {int(duration)}s (limit is {MAX_DURATION_SECONDS}s)"
+            return None, f"VIDEO_TOO_LONG: Video duration ({int(duration)}s) exceeds short-form limit ({MAX_DURATION_SECONDS}s)"
 
         return meta, None
 
@@ -168,7 +170,7 @@ def download_media(
         "--no-warnings",
         "--no-playlist",
         # Prefer moderate quality for fast processing & small token footprint
-        "-f", "worst[height>=480]/best[height<=720]/best",
+        "-f", "b[height<=720]/bv*[height<=720]+ba/b/best",
         "--recode-video", "mp4",
         "-o", target_template,
     ]
@@ -188,8 +190,10 @@ def download_media(
         if proc.returncode != 0:
             stderr = proc.stderr.lower()
             if "login required" in stderr or "checkpoint" in stderr:
-                return None, "NEEDS_COOKIES"
-            return None, f"DOWNLOAD_FAILED: {proc.stderr.strip()[:200]}"
+                return None, "NEEDS_COOKIES: Authentication required to download video. Provide --cookies path/to/cookies.txt"
+            elif "private" in stderr or "not found" in stderr:
+                return None, "PRIVATE_VIDEO: Video is private or deleted"
+            return None, f"EXTRACTOR_BROKEN: Download error. Check yt-dlp version (`yt-dlp -U`): {proc.stderr.strip()[:180]}"
 
         # Find the created video file
         for f in os.listdir(output_dir):
