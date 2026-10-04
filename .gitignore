@@ -33,8 +33,9 @@ cache/
 *.jpg
 *.jpeg
 *.png
-test_*
+test_output*
 tests_tmp*
+!tests/*.py
 
 # Cookies and sensitive credentials
 cookies*.txt

@@ -312,6 +312,18 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 def cmd_frames(args: argparse.Namespace) -> int:
     """Second-pass on-demand frame zooming."""
+    if args.from_sec < 0 or args.from_sec >= args.to_sec:
+        res = {
+            "status": "error",
+            "error_code": "INVALID_RANGE",
+            "message": f"Invalid time range: --from-sec ({args.from_sec}) must be non-negative and strictly less than --to-sec ({args.to_sec}).",
+        }
+        if args.json:
+            print(json.dumps(res))
+        else:
+            print(f"Error [INVALID_RANGE]: {res['message']}", file=sys.stderr)
+        return 1
+
     target = args.target.strip()
     video_path = None
     output_dir = None
@@ -355,6 +367,19 @@ def cmd_frames(args: argparse.Namespace) -> int:
             "message": f"Could not find video file for '{target}'. If it was cleaned up, rerun 'inspect' first.",
         }
         print(json.dumps(res) if args.json else f"Error [VIDEO_NOT_FOUND]: {res['message']}", file=sys.stderr)
+        return 1
+
+    total_dur = get_video_duration(video_path)
+    if total_dur and args.from_sec >= total_dur:
+        res = {
+            "status": "error",
+            "error_code": "INVALID_RANGE",
+            "message": f"Invalid time range: --from-sec ({args.from_sec}s) exceeds total video duration ({total_dur:.1f}s).",
+        }
+        if args.json:
+            print(json.dumps(res))
+        else:
+            print(f"Error [INVALID_RANGE]: {res['message']}", file=sys.stderr)
         return 1
 
     frames = extract_range_frames(

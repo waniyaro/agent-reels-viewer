@@ -50,7 +50,7 @@ python3 scripts/viewer.py inspect "<URL_OR_FILE>" --json
 
 ### Key Options & Flags:
 - `<URL_OR_FILE>`: Supported social media URL (Instagram, TikTok, YouTube Shorts) OR direct filesystem path to a local video (e.g. `./clip.mp4`).
-- `--model {tiny,base,small}`: Whisper speech model size (default: `base`). Use `tiny` for faster execution on CPU.
+- `--model {tiny,base,small}`: Whisper speech model size (default: `base`, recommended minimum for production dialogue; `tiny` is primarily for fast smoke-testing on CPU).
 - `--no-speech`: Skip audio transcription pass entirely and prioritize dense visual keyframes.
 - `--whisper-timeout <SEC>`: Override speech transcription timeout limit in seconds.
 - `--mode quick`: Fetches metadata only without downloading video stream.
@@ -139,4 +139,5 @@ agent-reels-viewer doctor --download-model --model base
 - `NEEDS_COOKIES`: Platform requires authentication. Instruct user to supply cookies.txt.
 - `PRIVATE_VIDEO`: Video was deleted, made private, or is restricted.
 - `VIDEO_TOO_LONG`: Duration exceeds the 6-minute short-form limit.
+- `INVALID_RANGE`: Requested zoom time interval is negative, inverted, or exceeds video duration.
 - `EXTRACTOR_BROKEN`: Platform extractor outdated; update yt-dlp (`yt-dlp -U`).

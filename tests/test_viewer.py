@@ -498,7 +498,7 @@ class TestKeyframeAdaptiveDensity(unittest.TestCase):
 
 
 class TestPixelDifferenceDeduplication(unittest.TestCase):
-    """Test downscaled grayscale pixel-difference deduplication behavior."""
+    """Test downscaled grayscale tiled block deduplication behavior."""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -507,42 +507,58 @@ class TestPixelDifferenceDeduplication(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_deduplicate_fixture_identical_vs_text_change(self):
-        """Fixture test: two white frames with text added in second -> both preserved.
-        Two identical frames -> one removed."""
+        """Fixture test: fine 14px text edit preserved; identical frames with JPEG noise dropped."""
         from PIL import Image, ImageDraw
 
         f1_path = os.path.join(self.temp_dir, "frame_01.jpg")
-        im1 = Image.new("RGB", (640, 360), color=(255, 255, 255))
-        im1.save(f1_path, "JPEG")
+        im_base = Image.new("RGB", (768, 432), color=(30, 30, 30))
+        draw_base = ImageDraw.Draw(im_base)
+        draw_base.text((40, 40), "def my_function():", fill=(220, 220, 220))
+        draw_base.text((60, 65), "val = compute_result(", fill=(220, 220, 220))
+        im_base.save(f1_path, "JPEG", quality=85)
 
-        # f2 is an identical white frame
+        # f2 is an identical frame saved with different JPEG compression (quality 60)
         f2_path = os.path.join(self.temp_dir, "frame_02.jpg")
-        im1.save(f2_path, "JPEG")
+        im_base.save(f2_path, "JPEG", quality=60)
 
-        # f3 has base text
+        # f3 has a single small character 'x' (~14px) added at the cursor
         f3_path = os.path.join(self.temp_dir, "frame_03.jpg")
-        im3 = Image.new("RGB", (640, 360), color=(255, 255, 255))
-        draw3 = ImageDraw.Draw(im3)
-        draw3.text((100, 100), "print('Welcom')", fill=(0, 0, 0))
-        im3.save(f3_path, "JPEG")
+        im_edit = im_base.copy()
+        draw_edit = ImageDraw.Draw(im_edit)
+        draw_edit.text((220, 65), "x", fill=(255, 255, 255))
+        im_edit.save(f3_path, "JPEG", quality=85)
 
-        # f4 has a single symbol added ('e') simulating editor typing
-        f4_path = os.path.join(self.temp_dir, "frame_04.jpg")
-        im4 = Image.new("RGB", (640, 360), color=(255, 255, 255))
-        draw4 = ImageDraw.Draw(im4)
-        draw4.text((100, 100), "print('Welcome')", fill=(0, 0, 0))
-        im4.save(f4_path, "JPEG")
-
-        # 1. Identical frames: second frame must be dropped
+        # 1. Identical frames with JPEG noise: duplicate is dropped
         kept_identical = deduplicate_frames([(0.0, f1_path), (0.5, f2_path)], is_dense_mode=True)
         self.assertEqual(len(kept_identical), 1)
         self.assertEqual(kept_identical[0][1], f1_path)
 
-        # 2. Text modification (Welcom -> Welcome): both frames must be kept
-        kept_text = deduplicate_frames([(1.0, f3_path), (1.5, f4_path)], is_dense_mode=True)
-        self.assertEqual(len(kept_text), 2)
-        self.assertEqual(kept_text[0][1], f3_path)
-        self.assertEqual(kept_text[1][1], f4_path)
+        # 2. Single 14px small-font character edit: both frames are preserved
+        kept_edit = deduplicate_frames([(1.0, f1_path), (1.5, f3_path)], is_dense_mode=True)
+        self.assertEqual(len(kept_edit), 2)
+        self.assertEqual(kept_edit[0][1], f1_path)
+        self.assertEqual(kept_edit[1][1], f3_path)
+
+    def test_speech_mode_preserves_subtitles(self):
+        """In conversational mode (speech present), subtitle changes at bottom of screen must not be dropped."""
+        from PIL import Image, ImageDraw
+
+        f1_path = os.path.join(self.temp_dir, "sub_01.jpg")
+        im1 = Image.new("RGB", (768, 432), color=(20, 20, 20))
+        draw1 = ImageDraw.Draw(im1)
+        draw1.text((200, 380), "First spoken subtitle sentence.", fill=(255, 255, 255))
+        im1.save(f1_path, "JPEG")
+
+        f2_path = os.path.join(self.temp_dir, "sub_02.jpg")
+        im2 = Image.new("RGB", (768, 432), color=(20, 20, 20))
+        draw2 = ImageDraw.Draw(im2)
+        draw2.text((200, 380), "Second spoken subtitle sentence.", fill=(255, 255, 255))
+        im2.save(f2_path, "JPEG")
+
+        kept = deduplicate_frames([(0.0, f1_path), (3.5, f2_path)], is_dense_mode=False)
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(kept[0][1], f1_path)
+        self.assertEqual(kept[1][1], f2_path)
 
 
 class TestCmdFrames(unittest.TestCase):
@@ -646,6 +662,101 @@ class TestCmdFrames(unittest.TestCase):
             code = cmd_frames(args)
 
         self.assertEqual(code, 1)
+
+    def test_frames_consecutive_calls_no_contamination(self):
+        """Two consecutive calls on same session with different ranges return only their own frames."""
+        if not os.path.exists(self.video_path):
+            self.skipTest("FFmpeg fixture missing")
+
+        session_dir = os.path.join(self.temp_dir, "session_consecutive")
+        os.makedirs(session_dir, exist_ok=True)
+        shutil.copy(self.video_path, os.path.join(session_dir, "video.mp4"))
+
+        import argparse
+        # First call: 0.5s to 1.5s (count 2)
+        args1 = argparse.Namespace(
+            target=session_dir,
+            from_sec=0.5,
+            to_sec=1.5,
+            count=2,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out1:
+            code1 = cmd_frames(args1)
+            data1 = json.loads(mock_out1.getvalue())
+
+        self.assertEqual(code1, 0)
+        self.assertEqual(data1.get("frames_extracted"), 2)
+        frames1 = data1.get("frames", [])
+        self.assertTrue(all("0.5-1.5" in f for f in frames1))
+
+        # Second call: 2.0s to 3.0s (count 2)
+        args2 = argparse.Namespace(
+            target=session_dir,
+            from_sec=2.0,
+            to_sec=3.0,
+            count=2,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out2:
+            code2 = cmd_frames(args2)
+            data2 = json.loads(mock_out2.getvalue())
+
+        self.assertEqual(code2, 0)
+        self.assertEqual(data2.get("frames_extracted"), 2)
+        frames2 = data2.get("frames", [])
+        self.assertTrue(all("2.0-3.0" in f for f in frames2))
+        # Ensure no overlap/contamination from call 1
+        self.assertFalse(any(f in frames1 for f in frames2))
+
+        # Repeat call on same range: does not crash
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out3:
+            code3 = cmd_frames(args2)
+            data3 = json.loads(mock_out3.getvalue())
+        self.assertEqual(code3, 0)
+        self.assertEqual(data3.get("frames_extracted"), 2)
+
+    def test_frames_invalid_range_errors(self):
+        """Verify INVALID_RANGE error code for invalid or out-of-bounds time intervals."""
+        if not os.path.exists(self.video_path):
+            self.skipTest("FFmpeg fixture missing")
+
+        import argparse
+        # Case A: from_sec >= to_sec
+        args_inverted = argparse.Namespace(
+            target=self.video_path,
+            from_sec=3.0,
+            to_sec=1.0,
+            count=2,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = cmd_frames(args_inverted)
+            data = json.loads(mock_out.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(data.get("error_code"), "INVALID_RANGE")
+
+        # Case B: from_sec exceeds video duration (4.0s)
+        args_oob = argparse.Namespace(
+            target=self.video_path,
+            from_sec=10.0,
+            to_sec=12.0,
+            count=2,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = cmd_frames(args_oob)
+            data = json.loads(mock_out.getvalue())
+        self.assertEqual(code, 1)
+        self.assertEqual(data.get("error_code"), "INVALID_RANGE")
 
 
 class TestLimitsAndConstants(unittest.TestCase):

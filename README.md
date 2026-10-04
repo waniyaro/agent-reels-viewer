@@ -100,7 +100,10 @@ agent-reels-viewer inspect "https://www.youtube.com/shorts/..." --json
 # Inspect a local video file (bypasses URL whitelists and downloads)
 agent-reels-viewer inspect ./my_video.mp4 --json
 
-# Fast CPU transcription using smaller model
+# Speech transcription with recommended model (base is recommended minimum for dialogue accuracy)
+agent-reels-viewer inspect "https://www.youtube.com/shorts/..." --model base --json
+
+# Fast CPU smoke-test using tiny model
 agent-reels-viewer inspect "https://www.tiktok.com/@user/video/..." --model tiny --json
 
 # Pure visual mode (skip audio transcription pass)

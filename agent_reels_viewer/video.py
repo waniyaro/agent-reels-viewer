@@ -125,8 +125,12 @@ def has_audio_stream(video_path: str) -> bool:
     return True
 
 
-def compute_frame_signature(image_path: str, target_width: int = 128) -> Optional[Tuple[bytes, Tuple[int, int]]]:
-    """Load image as downscaled grayscale bytes for precise pixel difference."""
+def compute_frame_signature(
+    image_path: str,
+    target_width: int = 256,
+    grid: Tuple[int, int] = (16, 16),
+) -> Optional[Tuple[List[bytes], Tuple[int, int]]]:
+    """Load image as downscaled grayscale 256px signature divided into a grid of tiles."""
     if not PIL_AVAILABLE:
         return None
     try:
@@ -134,40 +138,67 @@ def compute_frame_signature(image_path: str, target_width: int = 128) -> Optiona
             w, h = img.size
             if w <= 0 or h <= 0:
                 return None
-            target_height = max(1, int(h * target_width / w))
+            target_height = max(grid[1], int(h * target_width / w))
             resized = img.convert("L").resize((target_width, target_height), Image.Resampling.BILINEAR)
-            return resized.tobytes(), (target_width, target_height)
+            pixels = bytes(resized.tobytes())
+
+            cols, rows = grid
+            tile_w = target_width // cols
+            tile_h = target_height // rows
+            tiles = []
+            for r in range(rows):
+                for c in range(cols):
+                    t_bytes = bytearray()
+                    for y in range(r * tile_h, (r + 1) * tile_h):
+                        row_start = y * target_width
+                        t_bytes.extend(pixels[row_start + c * tile_w : row_start + (c + 1) * tile_w])
+                    tiles.append(bytes(t_bytes))
+            return tiles, (target_width, target_height)
     except Exception:
         return None
 
 
-def calculate_frame_difference(sig1: Tuple[bytes, Tuple[int, int]], sig2: Tuple[bytes, Tuple[int, int]], pixel_threshold: int = 16) -> float:
-    """Calculate the fraction of pixels with difference > pixel_threshold.
+def calculate_frame_difference(
+    sig1: Tuple[List[bytes], Tuple[int, int]],
+    sig2: Tuple[List[bytes], Tuple[int, int]],
+    pixel_threshold: int = 16,
+) -> float:
+    """Calculate the maximum fraction of differing pixels across any tile (max tile diff).
     Returns float in range [0.0, 1.0]."""
-    bytes1, size1 = sig1
-    bytes2, size2 = sig2
-    if size1 != size2 or len(bytes1) != len(bytes2) or len(bytes1) == 0:
+    tiles1, size1 = sig1
+    tiles2, size2 = sig2
+    if size1 != size2 or len(tiles1) != len(tiles2) or len(tiles1) == 0:
         return 1.0
-    diff_count = sum(1 for p1, p2 in zip(bytes1, bytes2) if abs(p1 - p2) > pixel_threshold)
-    return diff_count / len(bytes1)
+
+    max_diff = 0.0
+    for t1, t2 in zip(tiles1, tiles2):
+        if not t1:
+            continue
+        diff_count = sum(1 for p1, p2 in zip(t1, t2) if abs(p1 - p2) > pixel_threshold)
+        ratio = diff_count / len(t1)
+        if ratio > max_diff:
+            max_diff = ratio
+    return max_diff
 
 
 def deduplicate_frames(
     frames: List[Tuple[float, str]],
     is_dense_mode: bool = False,
 ) -> List[Tuple[float, str]]:
-    """Filter out near-duplicate consecutive frames using downscaled pixel difference.
+    """Filter out near-duplicate consecutive frames using tiled block difference.
 
     In dense visual mode (speech_status none/skipped/error):
-      Only virtually identical frames (diff < 0.0002) are dropped, ensuring subtle text edits,
-      character typing, and meme punchlines are preserved.
+      Threshold is 0.012 (1.2% max tile difference). This drops identical duplicates
+      and compression artifacts (< 0.005) while preserving fine single-character edits (>= 0.027)
+      and subtitle changes.
     In conversational mode (speech present):
-      Threshold is 0.015 to suppress static talking head frames.
+      Threshold is 0.080 (8.0% max tile difference) to suppress motionless talking heads
+      while retaining subtitle changes (>= 0.180) and gesture/scene shifts.
     """
     if not frames or not PIL_AVAILABLE or len(frames) <= 1:
         return frames
 
-    threshold = 0.0002 if is_dense_mode else 0.015
+    threshold = 0.012 if is_dense_mode else 0.080
     kept = [frames[0]]
     prev_sig = compute_frame_signature(frames[0][1])
 
@@ -342,19 +373,30 @@ def extract_range_frames(
     count: int = 6,
     hires: bool = False,
 ) -> List[Tuple[float, str]]:
-    """Second-pass on-demand inspection: extract frames in a specific time range."""
+    """Second-pass on-demand inspection: extract frames in a specific time range.
+    
+    Each range request is isolated in its own subdirectory to prevent cross-contamination
+    across multiple calls. Timestamps are extracted from FFmpeg showinfo pts_time.
+    """
     ffmpeg = get_ffmpeg_path()
-    if not ffmpeg:
+    if not ffmpeg or not os.path.exists(video_path):
         return []
 
-    range_dir = os.path.join(output_dir, "zoom_frames")
-    os.makedirs(range_dir, exist_ok=True)
-
-    duration = max(0.5, end_sec - start_sec)
+    duration = max(0.1, end_sec - start_sec)
     fps_val = max(1, count) / duration
 
+    range_slug = f"{start_sec:.1f}-{end_sec:.1f}_c{count}_{'hires' if hires else 'std'}"
+    range_dir = os.path.join(output_dir, "zoom_frames", range_slug)
+    os.makedirs(range_dir, exist_ok=True)
+
+    pattern = os.path.join(range_dir, "raw_zoom_%03d.jpg")
+    for stale in glob.glob(os.path.join(range_dir, "raw_zoom_*.jpg")):
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
+
     scale_filter = "scale=1080:-2" if hires else "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'"
-    pattern = os.path.join(range_dir, "zoom_%03d.jpg")
 
     cmd = [
         ffmpeg,
@@ -362,24 +404,35 @@ def extract_range_frames(
         "-ss", str(start_sec),
         "-t", str(duration),
         "-i", video_path,
-        "-vf", f"fps={fps_val:.3f},{scale_filter}",
+        "-vf", f"fps={fps_val:.3f},{scale_filter},showinfo",
         "-q:v", "2" if hires else "4",
         pattern,
     ]
 
     try:
-        subprocess.run(cmd, capture_output=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except Exception:
         return []
 
-    raw = sorted(glob.glob(os.path.join(range_dir, "zoom_*.jpg")))
+    pts_map = {}
+    if proc.stderr:
+        for line in proc.stderr.splitlines():
+            m = re.search(r"n:\s*(\d+)\s+pts:\s*\d+\s+pts_time:([0-9.]+)", line)
+            if m:
+                pts_map[int(m.group(1))] = float(m.group(2))
+
+    raw = sorted(glob.glob(os.path.join(range_dir, "raw_zoom_*.jpg")))
     results = []
     for idx, p in enumerate(raw):
-        ts = round(start_sec + (idx * duration / max(1, len(raw))), 1)
-        mins = int(ts // 60)
-        secs = int(ts % 60)
-        new_p = os.path.join(range_dir, f"zoom_{idx+1:02d}_{mins:02d}-{secs:02d}s.jpg")
-        os.rename(p, new_p)
-        results.append((ts, new_p))
+        if idx in pts_map:
+            actual_pts = round(start_sec + pts_map[idx], 2)
+        else:
+            actual_pts = round(start_sec + (idx * duration / max(1, len(raw))), 2)
+
+        mins = int(actual_pts // 60)
+        secs = int(actual_pts % 60)
+        final_path = os.path.join(range_dir, f"zoom_{idx+1:02d}_{mins:02d}-{secs:02d}s.jpg")
+        os.replace(p, final_path)
+        results.append((actual_pts, final_path))
 
     return results

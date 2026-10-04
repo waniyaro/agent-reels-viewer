@@ -80,54 +80,24 @@ jobs:
 
     - name: Canary 1 - YouTube Short Inspection (RRqwSLMK1hQ)
       run: |
-        OUT=$(agent-reels-viewer inspect "https://www.youtube.com/shorts/RRqwSLMK1hQ" --model tiny --json)
-        echo "Output: $OUT"
-        python3 -c "
-        import json, sys
-        data = json.loads('''$OUT''')
-        if data.get('status') == 'success':
-            sys.exit(0)
-        sys.exit(1)
-        "
+        OUT={"status": "error", "error_code": "LOCAL_FILE_NOT_FOUND", "message": "Local video file not found at: "https://www.youtube.com/shorts/RRqwSLMK1hQ""}
+        echo "Output: "
+        python scripts/ci_check.py youtube ""
 
     - name: Canary 2 - TikTok Public Metadata (7106594312292453675)
       run: |
-        OUT=$(agent-reels-viewer inspect "https://www.tiktok.com/@tiktok/video/7106594312292453675" --mode quick --json)
-        echo "Output: $OUT"
-        python3 -c "
-        import json, sys
-        data = json.loads('''$OUT''')
-        if data.get('status') == 'success':
-            sys.exit(0)
-        sys.exit(1)
-        "
+        OUT={"status": "error", "error_code": "LOCAL_FILE_NOT_FOUND", "message": "Local video file not found at: "https://www.tiktok.com/@tiktok/video/7106594312292453675""}
+        echo "Output: "
+        python scripts/ci_check.py tiktok ""
 
     - name: Canary 3 - Instagram Reel Check (C8P0Y8KItbQ, expects success or NEEDS_COOKIES)
       run: |
-        OUT=$(agent-reels-viewer inspect "https://www.instagram.com/reel/C8P0Y8KItbQ" --mode quick --json)
-        echo "Output: $OUT"
-        python3 -c "
-        import json, sys
-        data = json.loads('''$OUT''')
-        if data.get('status') == 'success':
-            sys.exit(0)
-        code = data.get('error_code', '')
-        if code in ('NEEDS_COOKIES', 'PRIVATE_VIDEO'):
-            print(f'Expected login-wall error code: {code}')
-            sys.exit(0)
-        print(f'Unexpected failure code: {code}')
-        sys.exit(1)
-        "
+        OUT={"status": "error", "error_code": "LOCAL_FILE_NOT_FOUND", "message": "Local video file not found at: "https://www.instagram.com/reel/C8P0Y8KItbQ""}
+        echo "Output: "
+        python scripts/ci_check.py instagram ""
 
     - name: Canary 4 - Speech Video (8Zx04h24uBs, expects speech_status=ok)
       run: |
-        OUT=$(agent-reels-viewer inspect "https://www.youtube.com/watch?v=8Zx04h24uBs" --model tiny --json)
-        echo "Output: $OUT"
-        python3 -c "
-        import json, sys
-        data = json.loads('''$OUT''')
-        if data.get('status') == 'success' and data.get('speech_status') == 'ok':
-            sys.exit(0)
-        print(f'Speech verification failed: status={data.get(\"status\")}, speech_status={data.get(\"speech_status\")}')
-        sys.exit(1)
-        "
+        OUT=
+        echo "Output: "
+        python scripts/ci_check.py speech ""
