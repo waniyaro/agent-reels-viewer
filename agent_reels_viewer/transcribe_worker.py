@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
 
 def get_ffmpeg_path():
@@ -32,22 +31,17 @@ def main():
     language = None if sys.argv[3] == "None" else sys.argv[3]
     output_json = sys.argv[4]
 
-    # Test hook for real timeout verification: sleep if requested by test
-    test_sleep = os.environ.get("AGENT_REELS_TEST_WORKER_SLEEP")
-    if test_sleep:
-        time.sleep(float(test_sleep))
-
     try:
         from faster_whisper import WhisperModel
         import numpy as np
     except ImportError as e:
-        with open(output_json, "w") as f:
+        with open(output_json, "w", encoding="utf-8") as f:
             json.dump({"error": f"ImportError: {e}"}, f)
         sys.exit(2)
 
     ffmpeg = get_ffmpeg_path()
     if not ffmpeg:
-        with open(output_json, "w") as f:
+        with open(output_json, "w", encoding="utf-8") as f:
             json.dump({"error": "ffmpeg missing for audio decoding"}, f)
         sys.exit(3)
 
@@ -62,10 +56,10 @@ def main():
         "-",
     ]
     try:
-        proc = subprocess.run(decode_cmd, capture_output=True, timeout=25, check=True)
+        proc = subprocess.run(decode_cmd, capture_output=True, timeout=30, check=True)
         audio_np = np.frombuffer(proc.stdout, dtype=np.int16).flatten().astype(np.float32) / 32768.0
     except Exception as e:
-        with open(output_json, "w") as f:
+        with open(output_json, "w", encoding="utf-8") as f:
             json.dump({"error": f"FFmpeg decode error: {e}"}, f)
         sys.exit(4)
 
@@ -102,7 +96,7 @@ def main():
         sys.exit(0)
 
     except Exception as e:
-        with open(output_json, "w") as f:
+        with open(output_json, "w", encoding="utf-8") as f:
             json.dump({"error": str(e)}, f)
         sys.exit(5)
 

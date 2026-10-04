@@ -6,6 +6,8 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Tuple
 
+from agent_reels_viewer.video import get_ffmpeg_version
+
 
 def check_binary(name: str) -> Tuple[bool, str]:
     """Check if a system CLI binary exists and return version."""
@@ -45,7 +47,7 @@ def check_python_package(pkg_name: str) -> Tuple[bool, str]:
         return False, f"Import error: {str(e)}"
 
 
-def run_doctor(download_model: bool = False) -> Dict[str, Any]:
+def run_doctor(download_model: bool = False, model_name: str = "base") -> Dict[str, Any]:
     """Perform health checks on all dependencies and print structured diagnostic."""
     print("=" * 60)
     print("Agent Reels Viewer — Environment Diagnostics (Doctor)")
@@ -68,28 +70,30 @@ def run_doctor(download_model: bool = False) -> Dict[str, Any]:
 
     print("\n[System Binaries]")
     print(f"  [{'PASS' if ffmpeg_ok else 'FAIL'}] ffmpeg:  {ffmpeg_info}")
+    if ffmpeg_ok:
+        major, minor = get_ffmpeg_version()
+        if (major, minor) < (5, 1):
+            print(f"         [WARN] FFmpeg version {major}.{minor} is older than 5.1. Legacy '-vsync' mode will be used.")
     print(f"  [{'PASS' if ffprobe_ok else 'WARN'}] ffprobe: {ffprobe_info}")
     print(f"  [{'PASS' if ytdlp_ok else 'FAIL'}] yt-dlp:  {ytdlp_info}")
 
     # 2. Python Libraries
     whisper_ok, whisper_info = check_python_package("faster_whisper")
     pillow_ok, pillow_info = check_python_package("PIL")
-    imghash_ok, imghash_info = check_python_package("imagehash")
 
     print("\n[Python Libraries]")
     print(f"  [{'PASS' if whisper_ok else 'WARN'}] faster-whisper: {whisper_info} (speech engine: {'READY' if whisper_ok else 'NOT READY'})")
     print(f"  [{'PASS' if pillow_ok else 'FAIL'}] Pillow (PIL):    {pillow_info}")
-    print(f"  [{'PASS' if imghash_ok else 'WARN'}] imagehash:       {imghash_info} (keyframe deduplication: {'READY' if imghash_ok else 'NOT READY'})")
 
     # 3. Model Pre-download (optional warm cache)
     if download_model:
         if whisper_ok:
-            print("\n[Model Download]")
-            print("  Downloading / warming up Whisper model (base)...")
+            print(f"\n[Model Download]")
+            print(f"  Downloading / warming up Whisper model ({model_name})...")
             try:
-                from faster_whisper import WhisperModel
-                _ = WhisperModel("base", device="auto", compute_type="int8")
-                print("  [PASS] Whisper 'base' model successfully cached.")
+                from faster_whisper import download_model as hf_download_model
+                cached_path = hf_download_model(model_name)
+                print(f"  [PASS] Whisper '{model_name}' model successfully cached at: {cached_path}")
             except Exception as e:
                 print(f"  [FAIL] Failed to pre-download model: {e}")
         else:
@@ -138,7 +142,6 @@ def run_doctor(download_model: bool = False) -> Dict[str, Any]:
         "yt_dlp": ytdlp_ok,
         "faster_whisper": whisper_ok,
         "pillow": pillow_ok,
-        "imagehash": imghash_ok,
         "core_ready": core_ready,
         "full_ready": full_ready,
     }

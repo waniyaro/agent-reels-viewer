@@ -6,22 +6,26 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from scripts.lib.audio import extract_audio, transcribe_audio
-from scripts.lib.downloader import (
+from agent_reels_viewer.audio import extract_audio, transcribe_audio
+from agent_reels_viewer.cli import auto_clean_old_sessions, cmd_inspect
+from agent_reels_viewer.downloader import (
     MAX_DURATION_SECONDS,
     detect_platform,
     fetch_metadata,
     validate_url,
 )
-from scripts.lib.timeline import assemble_timeline, format_timestamp
-from scripts.lib.video import (
+from agent_reels_viewer.timeline import assemble_timeline, format_timestamp
+from agent_reels_viewer.video import (
     extract_keyframes,
     extract_range_frames,
     get_ffmpeg_path,
+    get_ffmpeg_version,
+    has_audio_stream,
 )
 
 
@@ -81,8 +85,8 @@ class TestDownloaderValidation(unittest.TestCase):
             self.assertEqual(code, "INVALID_URL")
 
 
-class TestErrorCodes(unittest.TestCase):
-    """Test every structured error code individually."""
+class TestErrorCodesAndPreflights(unittest.TestCase):
+    """Test structured error codes and preflights."""
 
     def test_code_invalid_url(self):
         valid, code, err = validate_url("https://unsupported-site.com/video")
@@ -137,10 +141,9 @@ class TestErrorCodes(unittest.TestCase):
         self.assertEqual(code, "EXTRACTOR_BROKEN")
         self.assertIn("yt-dlp", msg)
 
-    @patch("scripts.viewer.get_ffmpeg_path")
+    @patch("agent_reels_viewer.cli.get_ffmpeg_path")
     def test_code_ffmpeg_missing(self, mock_ffmpeg):
         mock_ffmpeg.return_value = None
-        from scripts.viewer import cmd_inspect
         import argparse
 
         args = argparse.Namespace(
@@ -149,6 +152,7 @@ class TestErrorCodes(unittest.TestCase):
             cookies=None,
             output=None,
             mode="standard",
+            model="base",
             no_speech=False,
             max_frames=None,
             no_video=False,
@@ -164,50 +168,159 @@ class TestErrorCodes(unittest.TestCase):
         self.assertEqual(data.get("error_code"), "FFMPEG_MISSING")
 
 
+class TestLocalFileInspection(unittest.TestCase):
+    """Test inspecting local video files directly without downloading."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.local_mp4 = os.path.join(self.temp_dir, "test_clip.mp4")
+        ffmpeg = get_ffmpeg_path()
+        if ffmpeg:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "lavfi", "-i", "testsrc=duration=2:size=320x240:rate=10",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                self.local_mp4,
+            ]
+            subprocess.run(cmd, capture_output=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_inspect_local_file(self):
+        if not os.path.exists(self.local_mp4):
+            self.skipTest("FFmpeg not available to generate local fixture")
+
+        import argparse
+        out_session = os.path.join(self.temp_dir, "session_out")
+        args = argparse.Namespace(
+            url=self.local_mp4,
+            json=True,
+            cookies=None,
+            output=out_session,
+            mode="standard",
+            model="base",
+            no_speech=True,
+            max_frames=5,
+            no_video=False,
+            whisper_timeout=None,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            exit_code = cmd_inspect(args)
+            stdout_str = mock_out.getvalue()
+
+        self.assertEqual(exit_code, 0)
+        data = json.loads(stdout_str)
+        self.assertEqual(data.get("status"), "success")
+        self.assertEqual(data.get("platform"), "local")
+        self.assertEqual(data.get("video_path"), self.local_mp4)
+        self.assertTrue(os.path.exists(data.get("timeline_path")))
+
+
+class TestSafeAutoClean(unittest.TestCase):
+    """Test that auto-cleaning ONLY cleans the base cache root, never user custom output dirs."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.foreign_session = os.path.join(self.temp_dir, "session_user_data")
+        os.makedirs(self.foreign_session, exist_ok=True)
+        # Create a mock file inside foreign_session
+        with open(os.path.join(self.foreign_session, "notes.txt"), "w") as f:
+            f.write("important notes")
+
+        # Fake old timestamp (48 hours ago)
+        old_time = time.time() - (48 * 3600)
+        os.utime(self.foreign_session, (old_time, old_time))
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_auto_clean_only_cache_root(self):
+        # Attempt to auto-clean pointing to user's temp directory
+        auto_clean_old_sessions(self.temp_dir, max_age_hours=24)
+        # Verify the user directory session was NOT deleted
+        self.assertTrue(
+            os.path.exists(self.foreign_session),
+            "auto_clean_old_sessions unsafely deleted a directory outside get_base_cache_dir()!"
+        )
+
+
+class TestAudioAndSilentHandling(unittest.TestCase):
+    """Test audio extraction: distinguishing silent videos from extraction errors."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.silent_video = os.path.join(self.temp_dir, "silent.mp4")
+        ffmpeg = get_ffmpeg_path()
+        if ffmpeg:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "lavfi", "-i", "testsrc=duration=1:size=160x120:rate=10",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                self.silent_video,
+            ]
+            subprocess.run(cmd, capture_output=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_silent_video_reports_no_audio_stream(self):
+        if not os.path.exists(self.silent_video):
+            self.skipTest("FFmpeg not available")
+
+        self.assertFalse(has_audio_stream(self.silent_video))
+        audio_path, err_code, err_msg = extract_audio(self.silent_video, self.temp_dir)
+        self.assertIsNone(audio_path)
+        self.assertEqual(err_code, "NO_AUDIO_STREAM")
+
+    @patch("agent_reels_viewer.audio.has_audio_stream")
+    @patch("subprocess.run")
+    def test_audio_extraction_failure_reports_error(self, mock_run, mock_has_stream):
+        mock_has_stream.return_value = True
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_run.return_value = mock_proc
+
+        audio_path, err_code, err_msg = extract_audio("/dummy/video.mp4", self.temp_dir)
+        self.assertIsNone(audio_path)
+        self.assertEqual(err_code, "AUDIO_EXTRACTION_FAILED")
+
+
 class TestWhisperTimeout(unittest.TestCase):
-    """Test process-isolated Whisper timeout handling."""
+    """Test process-isolated Whisper timeout handling without test hooks in production code."""
 
     def test_whisper_timeout_real_subprocess(self):
-        tmp_audio = os.path.abspath("test_dummy_audio.mp3")
-        with open(tmp_audio, "wb") as f:
-            f.write(b"dummy")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create a mock worker script that intentionally sleeps longer than timeout
+            mock_worker = os.path.join(tmp_dir, "sleeping_worker.py")
+            with open(mock_worker, "w") as f:
+                f.write("import time, sys\ntime.sleep(4)\nsys.exit(0)\n")
 
-        os.environ["AGENT_REELS_TEST_WORKER_SLEEP"] = "3"
-        start_t = time.time()
-        try:
-            has_speech, segments, status, msg = transcribe_audio(tmp_audio, timeout_sec=1)
+            tmp_audio = os.path.join(tmp_dir, "test.mp3")
+            with open(tmp_audio, "wb") as f:
+                f.write(b"dummy")
+
+            start_t = time.time()
+            has_speech, segments, status, msg = transcribe_audio(
+                tmp_audio,
+                timeout_sec=1,
+                worker_script=mock_worker,
+            )
             elapsed = time.time() - start_t
             self.assertLess(elapsed, 2.5, "Subprocess was not killed within timeout limit")
             self.assertIsNone(has_speech)
             self.assertEqual(segments, [])
             self.assertEqual(status, "timeout")
             self.assertIn("WHISPER_TIMEOUT", msg)
-
-            # Verify timeline formatting on timeout
-            tmp_dir = os.path.abspath("test_timeout_timeline")
-            os.makedirs(tmp_dir, exist_ok=True)
-            try:
-                t_path = assemble_timeline(tmp_dir, {"title": "Timeout Video"}, [], [], has_speech, msg, speech_status="timeout")
-                with open(t_path, "r") as f:
-                    c = f.read()
-                    self.assertIn("Speech analysis timed out", c)
-            finally:
-                if os.path.exists(tmp_dir):
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-        finally:
-            os.environ.pop("AGENT_REELS_TEST_WORKER_SLEEP", None)
-            if os.path.exists(tmp_audio):
-                os.remove(tmp_audio)
+            self.assertIn("--model tiny", msg)
 
 
 class TestTimelineAssembly(unittest.TestCase):
     def setUp(self):
-        self.test_dir = os.path.abspath("test_timeline_tmp")
-        os.makedirs(self.test_dir, exist_ok=True)
+        self.temp_dir = tempfile.mkdtemp()
 
     def tearDown(self):
-        if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir, ignore_errors=True)
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_format_timestamp(self):
         self.assertEqual(format_timestamp(0), "00:00")
@@ -217,7 +330,7 @@ class TestTimelineAssembly(unittest.TestCase):
 
     def test_timeline_speech_status_ok(self):
         meta = {"title": "Speech Video", "uploader": "speaker", "webpage_url": "https://youtube.com/shorts/1", "duration": 30}
-        path = assemble_timeline(self.test_dir, meta, [], [{"start": 1.0, "end": 3.0, "text": "Hello"}], True, "ok", speech_status="ok")
+        path = assemble_timeline(self.temp_dir, meta, [], [{"start": 1.0, "end": 3.0, "text": "Hello"}], True, "ok", speech_status="ok")
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("Spoken dialogue present", c)
@@ -225,7 +338,7 @@ class TestTimelineAssembly(unittest.TestCase):
 
     def test_timeline_speech_status_none(self):
         meta = {"title": "Music Video", "uploader": "dj", "webpage_url": "https://tiktok.com/@dj/1", "duration": 20}
-        path = assemble_timeline(self.test_dir, meta, [], [], False, "no speech", speech_status="none")
+        path = assemble_timeline(self.temp_dir, meta, [], [], False, "no speech", speech_status="none")
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("No spoken speech detected (music/visual only)", c)
@@ -233,7 +346,7 @@ class TestTimelineAssembly(unittest.TestCase):
 
     def test_timeline_speech_status_skipped(self):
         meta = {"title": "Skipped Video", "uploader": "user", "webpage_url": "https://instagram.com/reel/1", "duration": 15}
-        path = assemble_timeline(self.test_dir, meta, [], [], None, "skipped", speech_status="skipped")
+        path = assemble_timeline(self.temp_dir, meta, [], [], None, "skipped", speech_status="skipped")
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("Speech analysis skipped (--no-speech)", c)
@@ -241,14 +354,14 @@ class TestTimelineAssembly(unittest.TestCase):
 
     def test_timeline_speech_status_timeout(self):
         meta = {"title": "Timeout Video", "uploader": "user", "webpage_url": "https://youtube.com/shorts/2", "duration": 60}
-        path = assemble_timeline(self.test_dir, meta, [], [], None, "timeout", speech_status="timeout")
+        path = assemble_timeline(self.temp_dir, meta, [], [], None, "timeout", speech_status="timeout")
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("Speech analysis timed out", c)
 
     def test_timeline_speech_status_error(self):
         meta = {"title": "Error Video", "uploader": "user", "webpage_url": "https://youtube.com/shorts/3", "duration": 15}
-        path = assemble_timeline(self.test_dir, meta, [], [], None, "module not found", speech_status="error")
+        path = assemble_timeline(self.temp_dir, meta, [], [], None, "module not found", speech_status="error")
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("Speech analysis unavailable", c)
@@ -260,9 +373,8 @@ class TestRealKeyframeCutsAndPTS(unittest.TestCase):
     """Test actual scene change detection and PTS timestamps against synthetic video cuts."""
 
     def setUp(self):
-        self.test_dir = os.path.abspath("test_cuts_tmp")
-        os.makedirs(self.test_dir, exist_ok=True)
-        self.video_path = os.path.join(self.test_dir, "cuts_fixture.mp4")
+        self.temp_dir = tempfile.mkdtemp()
+        self.video_path = os.path.join(self.temp_dir, "cuts_fixture.mp4")
 
         ffmpeg = get_ffmpeg_path()
         if ffmpeg:
@@ -279,14 +391,15 @@ class TestRealKeyframeCutsAndPTS(unittest.TestCase):
             subprocess.run(cmd, capture_output=True)
 
     def tearDown(self):
-        if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir, ignore_errors=True)
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_known_scene_cuts_match_pts(self):
         if not os.path.exists(self.video_path):
             self.skipTest("FFmpeg not available to generate cuts fixture")
 
-        frames = extract_keyframes(self.video_path, self.test_dir, max_frames=10, has_speech=False)
+        frames, ts_type, err_code, err_msg = extract_keyframes(self.video_path, self.temp_dir, max_frames=10, has_speech=False)
+        self.assertEqual(err_code, "")
+        self.assertEqual(ts_type, "exact")
         pts_list = [ts for ts, f in frames]
 
         # Verify initial frame at 0.0s
@@ -303,15 +416,27 @@ class TestRealKeyframeCutsAndPTS(unittest.TestCase):
     def test_max_frames_one(self):
         if not os.path.exists(self.video_path):
             self.skipTest("FFmpeg fixture missing")
-        frames = extract_keyframes(self.video_path, self.test_dir, max_frames=1)
+        frames, ts_type, err_code, err_msg = extract_keyframes(self.video_path, self.temp_dir, max_frames=1)
         self.assertEqual(len(frames), 1)
+        self.assertEqual(err_code, "")
+
+    @patch("subprocess.run")
+    def test_frame_extraction_failure_reports_code(self, mock_run):
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1
+        mock_proc.stderr = "Error initializing complex filter"
+        mock_run.return_value = mock_proc
+
+        frames, ts_type, err_code, err_msg = extract_keyframes(self.video_path, self.temp_dir)
+        self.assertEqual(frames, [])
+        self.assertEqual(err_code, "FRAME_EXTRACTION_FAILED")
+        self.assertIn("FFmpeg error", err_msg)
 
 
 class TestKeyframeAdaptiveDensity(unittest.TestCase):
     def setUp(self):
-        self.test_dir = os.path.abspath("test_keyframes_tmp")
-        os.makedirs(self.test_dir, exist_ok=True)
-        self.video_path = os.path.join(self.test_dir, "fixture.mp4")
+        self.temp_dir = tempfile.mkdtemp()
+        self.video_path = os.path.join(self.temp_dir, "fixture.mp4")
 
         ffmpeg = get_ffmpeg_path()
         if ffmpeg:
@@ -324,21 +449,20 @@ class TestKeyframeAdaptiveDensity(unittest.TestCase):
             subprocess.run(cmd, capture_output=True)
 
     def tearDown(self):
-        if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir, ignore_errors=True)
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_adaptive_sampling_density(self):
         if not os.path.exists(self.video_path):
             self.skipTest("FFmpeg not available for fixture generation")
 
         # Silent mode: step 1.5s -> extracts more frames
-        dir_silent = os.path.join(self.test_dir, "silent")
-        frames_silent = extract_keyframes(self.video_path, dir_silent, has_speech=False)
+        dir_silent = os.path.join(self.temp_dir, "silent")
+        frames_silent, _, _, _ = extract_keyframes(self.video_path, dir_silent, has_speech=False)
         self.assertGreaterEqual(len(frames_silent), 3)
 
         # Speech mode: step 3.0s -> extracts fewer frames
-        dir_speech = os.path.join(self.test_dir, "speech")
-        frames_speech = extract_keyframes(self.video_path, dir_speech, has_speech=True)
+        dir_speech = os.path.join(self.temp_dir, "speech")
+        frames_speech, _, _, _ = extract_keyframes(self.video_path, dir_speech, has_speech=True)
         self.assertLess(len(frames_speech), len(frames_silent))
 
 
@@ -346,6 +470,10 @@ class TestLimitsAndConstants(unittest.TestCase):
     def test_max_duration(self):
         self.assertLessEqual(MAX_DURATION_SECONDS, 600)
         self.assertGreaterEqual(MAX_DURATION_SECONDS, 60)
+
+    def test_ffmpeg_version_detection(self):
+        major, minor = get_ffmpeg_version()
+        self.assertGreaterEqual(major, 1)
 
 
 if __name__ == "__main__":

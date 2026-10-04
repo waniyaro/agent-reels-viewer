@@ -20,6 +20,7 @@ def assemble_timeline(
     has_speech: Optional[bool],
     transcription_status: str,
     speech_status: str = "ok",
+    timestamps_type: str = "exact",
 ) -> str:
     """Build structured timeline.md artifact linking frames and audio chronologically."""
     timeline_path = os.path.join(output_dir, "timeline.md")
@@ -49,6 +50,8 @@ def assemble_timeline(
     else:
         speech_label = "No spoken speech detected (music/visual only)"
 
+    ts_note = "Exact PTS timestamps from FFmpeg" if timestamps_type == "exact" else "Approximate timestamps (FFmpeg showinfo metadata unavailable)"
+
     lines = []
     lines.append(f"# Video Inspection: {title[:80]}")
     lines.append("")
@@ -64,6 +67,7 @@ def assemble_timeline(
     if views or likes:
         lines.append(f"- **Engagement**: {views:,} views | {likes:,} likes")
     lines.append(f"- **Soundtrack**: {track_name}")
+    lines.append(f"- **Keyframe Timestamps**: {ts_note}")
     lines.append(f"- **Speech Status**: {speech_label}")
     lines.append(f"- **Diagnostics**: {transcription_status}")
     lines.append("")

@@ -7,7 +7,7 @@ name = "agent-reels-viewer"
 version = "0.1.0"
 description = "Lightweight multimodal agent skill to inspect and understand Instagram Reels, TikTok, and YouTube Shorts (audio + keyframes + timeline)"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "waniyaro" }
@@ -33,22 +33,14 @@ dependencies = [
 [project.optional-dependencies]
 speech = [
     "faster-whisper>=1.0.0",
-    "imagehash>=4.3.1",
-]
-audio = [
-    "faster-whisper>=1.0.0",
-]
-dedup = [
-    "imagehash>=4.3.1",
 ]
 all = [
     "faster-whisper>=1.0.0",
-    "imagehash>=4.3.1",
 ]
 
 [project.scripts]
-agent-reels-viewer = "scripts.viewer:main"
+agent-reels-viewer = "agent_reels_viewer.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["scripts*"]
+include = ["agent_reels_viewer*"]

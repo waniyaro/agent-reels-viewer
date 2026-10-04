@@ -1,4 +1,4 @@
-"""Video processing module: scene detection, adaptive keyframe extraction, and deduplication."""
+"""Video processing module: scene detection, adaptive keyframe extraction, and pure Pillow deduplication."""
 
 import glob
 import math
@@ -13,12 +13,6 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-
-try:
-    import imagehash
-    IMAGEHASH_AVAILABLE = True
-except ImportError:
-    IMAGEHASH_AVAILABLE = False
 
 
 def get_ffmpeg_path() -> Optional[str]:
@@ -51,6 +45,22 @@ def get_ffprobe_path() -> Optional[str]:
                 path = c
                 break
     return path
+
+
+def get_ffmpeg_version() -> Tuple[int, int]:
+    """Parse FFmpeg major and minor version numbers. Returns e.g. (9, 0) or (4, 4)."""
+    ffmpeg = get_ffmpeg_path()
+    if not ffmpeg:
+        return (0, 0)
+    try:
+        res = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True, timeout=5)
+        first_line = (res.stdout or res.stderr).splitlines()[0]
+        m = re.search(r"ffmpeg version (?:n)?(\d+)\.(\d+)", first_line)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    return (5, 1)
 
 
 def get_video_duration(video_path: str) -> float:
@@ -86,28 +96,86 @@ def get_video_duration(video_path: str) -> float:
     return 0.0
 
 
+def has_audio_stream(video_path: str) -> bool:
+    """Check if video container contains at least one audio stream."""
+    ffprobe = get_ffprobe_path()
+    if ffprobe:
+        cmd = [
+            ffprobe,
+            "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            video_path,
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            return len(res.stdout.strip()) > 0
+        except Exception:
+            pass
+
+    ffmpeg = get_ffmpeg_path()
+    if ffmpeg:
+        try:
+            res = subprocess.run([ffmpeg, "-i", video_path], capture_output=True, text=True, timeout=5)
+            return "Audio:" in (res.stderr or "")
+        except Exception:
+            pass
+
+    return True  # Fallback assume audio stream present
+
+
+def compute_dhash(image_path: str, hash_size: int = 8) -> int:
+    """Compute difference hash (dHash) using pure PIL without external dependencies."""
+    if not PIL_AVAILABLE:
+        return 0
+    with Image.open(image_path) as img:
+        resized = img.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.BILINEAR)
+        pixels = resized.tobytes()
+        val = 0
+        for row in range(hash_size):
+            row_start = row * (hash_size + 1)
+            for col in range(hash_size):
+                val = (val << 1) | (1 if pixels[row_start + col] > pixels[row_start + col + 1] else 0)
+        return val
+
+
+def hamming_distance(h1: int, h2: int) -> int:
+    """Compute bitwise Hamming distance between two 64-bit hashes."""
+    return bin(h1 ^ h2).count("1")
+
+
 def deduplicate_frames(
     frames: List[Tuple[float, str]],
-    max_distance: int = 6,
+    max_distance: int = 2,
 ) -> List[Tuple[float, str]]:
-    """Filter out near-duplicate consecutive frames using perceptual hashing.
-    Preserves true PTS timestamps for surviving frames."""
-    if not frames or not (PIL_AVAILABLE and IMAGEHASH_AVAILABLE):
+    """Filter out near-duplicate consecutive frames using pure Pillow dHash + luminance check."""
+    if not frames or not PIL_AVAILABLE or len(frames) <= 1:
         return frames
+
+    from PIL import ImageStat
 
     kept = [frames[0]]
     try:
-        prev_hash = imagehash.phash(Image.open(frames[0][1]))
+        with Image.open(frames[0][1]) as im0:
+            prev_luma = ImageStat.Stat(im0.convert("L")).mean[0]
+            prev_hash = compute_dhash(frames[0][1])
     except Exception:
         return frames
 
     for pts, p in frames[1:]:
         try:
-            curr_hash = imagehash.phash(Image.open(p))
-            diff = curr_hash - prev_hash
-            if diff >= max_distance:
+            with Image.open(p) as curr_im:
+                curr_luma = ImageStat.Stat(curr_im.convert("L")).mean[0]
+                curr_hash = compute_dhash(p)
+
+            dist = hamming_distance(curr_hash, prev_hash)
+            luma_diff = abs(curr_luma - prev_luma)
+
+            if dist >= max_distance or luma_diff >= 20.0:
                 kept.append((pts, p))
                 prev_hash = curr_hash
+                prev_luma = curr_luma
             else:
                 try:
                     os.remove(p)
@@ -119,18 +187,27 @@ def deduplicate_frames(
     return kept
 
 
+def sanitize_stderr(stderr_text: str) -> str:
+    """Sanitize stderr to strip potential cookie paths or sensitive tokens."""
+    cleaned = re.sub(r'cookies(?:\.txt)?', '[COOKIES_REDACTED]', stderr_text, flags=re.IGNORECASE)
+    cleaned = re.sub(r'--cookies\s+[^\s]+', '--cookies [REDACTED]', cleaned)
+    return cleaned.strip()[-300:]
+
+
 def extract_keyframes(
     video_path: str,
     output_dir: str,
     max_frames: Optional[int] = None,
     has_speech: bool = True,
-) -> List[Tuple[float, str]]:
+) -> Tuple[List[Tuple[float, str]], str, str, str]:
     """Extract scene keyframes using hybrid scene detection + adaptive cadence floor.
-    Uses real PTS timestamps extracted from FFmpeg showinfo filter.
+    
+    Returns: (keyframes_list, timestamp_type, error_code, error_message)
+    timestamp_type is 'exact' or 'approximate'
     """
     ffmpeg = get_ffmpeg_path()
     if not ffmpeg:
-        return []
+        return [], "exact", "FFMPEG_MISSING", "ffmpeg binary is not found."
 
     frames_dir = os.path.join(output_dir, "frames")
     os.makedirs(frames_dir, exist_ok=True)
@@ -165,8 +242,10 @@ def extract_keyframes(
     scale_filter = "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'"
     raw_pattern = os.path.join(frames_dir, "raw_frame_%04d.jpg")
 
-    # Hybrid filter: scene cut (> 0.3) OR cadence floor (step).
-    # showinfo outputs accurate pts_time in stderr.
+    # Compatibility: -fps_mode in FFmpeg >= 5.1, -vsync in older
+    major, minor = get_ffmpeg_version()
+    vfr_args = ["-fps_mode", "vfr"] if (major, minor) >= (5, 1) else ["-vsync", "vfr"]
+
     filter_expr = f"select='isnan(prev_selected_t)+gt(scene,0.3)+gte(t-prev_selected_t,{step:.2f})',{scale_filter},showinfo"
 
     cmd = [
@@ -174,7 +253,7 @@ def extract_keyframes(
         "-y",
         "-i", video_path,
         "-vf", filter_expr,
-        "-fps_mode", "vfr",
+    ] + vfr_args + [
         "-pix_fmt", "yuvj420p",
         "-q:v", "3",
         raw_pattern,
@@ -182,8 +261,13 @@ def extract_keyframes(
 
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    except Exception:
-        return []
+        if proc.returncode != 0:
+            err_tail = sanitize_stderr(proc.stderr)
+            return [], "exact", "FRAME_EXTRACTION_FAILED", f"FFmpeg error ({proc.returncode}): {err_tail}"
+    except subprocess.TimeoutExpired:
+        return [], "exact", "FRAME_EXTRACTION_FAILED", "Keyframe extraction timed out after 60s."
+    except Exception as e:
+        return [], "exact", "FRAME_EXTRACTION_FAILED", f"Extraction error: {str(e)}"
 
     # Parse PTS time from showinfo lines in stderr
     pts_map = {}
@@ -194,17 +278,25 @@ def extract_keyframes(
 
     raw_files = sorted(glob.glob(os.path.join(frames_dir, "raw_frame_*.jpg")))
     if not raw_files:
-        return []
+        err_tail = sanitize_stderr(proc.stderr)
+        return [], "exact", "FRAME_EXTRACTION_FAILED", f"No keyframes were generated. FFmpeg output: {err_tail}"
 
     frames_with_pts: List[Tuple[float, str]] = []
+    all_pts_exact = True
     for idx, fpath in enumerate(raw_files):
-        pts = pts_map.get(idx, round(idx * (duration / max(1, len(raw_files))), 2))
+        if idx in pts_map:
+            pts = pts_map[idx]
+        else:
+            all_pts_exact = False
+            pts = round(idx * (duration / max(1, len(raw_files))), 2)
         frames_with_pts.append((pts, fpath))
 
-    # Deduplicate near-identical frames (perceptual hashing)
+    timestamp_type = "exact" if all_pts_exact else "approximate"
+
+    # Deduplicate near-identical frames using pure Pillow dHash
     filtered = deduplicate_frames(frames_with_pts)
 
-    # Cap to effective_max if needed, preserving spacing and real PTS
+    # Cap to effective_max if needed
     if len(filtered) > effective_max:
         if effective_max == 1:
             indices = [0]
@@ -235,7 +327,7 @@ def extract_keyframes(
             os.rename(fpath, final_name)
         final_results.append((pts_rounded, final_name))
 
-    return final_results
+    return final_results, timestamp_type, "", ""
 
 
 def extract_range_frames(
