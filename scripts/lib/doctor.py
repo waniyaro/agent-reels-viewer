@@ -4,18 +4,18 @@ import os
 import shutil
 import subprocess
 import sys
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 
 def check_binary(name: str) -> Tuple[bool, str]:
     """Check if a system CLI binary exists and return version."""
     path = shutil.which(name)
     if not path:
-        # Check ~/.local/bin or brew paths
         candidates = [
-            f"/Users/waniyaro/.local/bin/{name}",
+            os.path.expanduser(f"~/.local/bin/{name}"),
             f"/opt/homebrew/bin/{name}",
             f"/usr/local/bin/{name}",
+            f"/usr/bin/{name}",
         ]
         for c in candidates:
             if os.path.exists(c):
@@ -45,10 +45,10 @@ def check_python_package(pkg_name: str) -> Tuple[bool, str]:
         return False, f"Import error: {str(e)}"
 
 
-def run_doctor() -> Dict[str, Any]:
+def run_doctor(download_model: bool = False) -> Dict[str, Any]:
     """Perform health checks on all dependencies and print structured diagnostic."""
     print("=" * 60)
-    print("🩺 Agent Reels Viewer — Environment Diagnostics (Doctor)")
+    print("Agent Reels Viewer — Environment Diagnostics (Doctor)")
     print("=" * 60)
 
     # 1. System Binaries
@@ -67,9 +67,9 @@ def run_doctor() -> Dict[str, Any]:
             pass
 
     print("\n[System Binaries]")
-    print(f"  {'✅' if ffmpeg_ok else '❌'} ffmpeg:  {ffmpeg_info}")
-    print(f"  {'✅' if ffprobe_ok else '❌'} ffprobe: {ffprobe_info}")
-    print(f"  {'✅' if ytdlp_ok else '❌'} yt-dlp:  {ytdlp_info}")
+    print(f"  [{'PASS' if ffmpeg_ok else 'FAIL'}] ffmpeg:  {ffmpeg_info}")
+    print(f"  [{'PASS' if ffprobe_ok else 'WARN'}] ffprobe: {ffprobe_info}")
+    print(f"  [{'PASS' if ytdlp_ok else 'FAIL'}] yt-dlp:  {ytdlp_info}")
 
     # 2. Python Libraries
     whisper_ok, whisper_info = check_python_package("faster_whisper")
@@ -77,11 +77,26 @@ def run_doctor() -> Dict[str, Any]:
     imghash_ok, imghash_info = check_python_package("imagehash")
 
     print("\n[Python Libraries]")
-    print(f"  {'✅' if whisper_ok else '⚠️ '} faster-whisper: {whisper_info} (optional, for speech audio)")
-    print(f"  {'✅' if pillow_ok else '⚠️ '} Pillow (PIL):    {pillow_info}")
-    print(f"  {'✅' if imghash_ok else '⚠️ '} imagehash:       {imghash_info} (optional, for keyframe deduplication)")
+    print(f"  [{'PASS' if whisper_ok else 'WARN'}] faster-whisper: {whisper_info} (speech engine: {'READY' if whisper_ok else 'NOT READY'})")
+    print(f"  [{'PASS' if pillow_ok else 'FAIL'}] Pillow (PIL):    {pillow_info}")
+    print(f"  [{'PASS' if imghash_ok else 'WARN'}] imagehash:       {imghash_info} (keyframe deduplication: {'READY' if imghash_ok else 'NOT READY'})")
 
-    # 3. Cookies detection
+    # 3. Model Pre-download (optional warm cache)
+    if download_model:
+        if whisper_ok:
+            print("\n[Model Download]")
+            print("  Downloading / warming up Whisper model (base)...")
+            try:
+                from faster_whisper import WhisperModel
+                _ = WhisperModel("base", device="auto", compute_type="int8")
+                print("  [PASS] Whisper 'base' model successfully cached.")
+            except Exception as e:
+                print(f"  [FAIL] Failed to pre-download model: {e}")
+        else:
+            print("\n[Model Download]")
+            print("  [SKIP] faster-whisper is not installed. Run: pip install '.[speech]'")
+
+    # 4. Cookies detection
     cookie_paths = [
         os.path.expanduser("~/.config/agent-reels-viewer/cookies.txt"),
         os.path.abspath("./cookies.txt"),
@@ -89,26 +104,31 @@ def run_doctor() -> Dict[str, Any]:
     cookies_found = [p for p in cookie_paths if os.path.exists(p)]
     print("\n[Authentication & Cookies]")
     if cookies_found:
-        print(f"  ✅ Found cookies file at: {cookies_found[0]}")
+        print(f"  [INFO] Found cookies file at: {cookies_found[0]}")
     else:
-        print("  ℹ️  No cookies.txt found in default locations.")
-        print("     (Instagram Reels may require cookies if platform rate-limits or asks for login).")
+        print("  [INFO] No cookies.txt found in default locations.")
+        print("         (Instagram Reels may require cookies if platform rate-limits or asks for login).")
 
-    # 4. Summary & Advice
+    # 5. Summary & Advice
     print("\n" + "-" * 60)
-    ready = ffmpeg_ok and ytdlp_ok
-    if ready:
-        print("✨ Status: CORE ENGINE READY!")
-        print("   Video download and visual keyframe extraction are fully operational.")
-    else:
-        print("⚠️ Status: ACTION REQUIRED!")
-        if not ffmpeg_ok:
-            print("   → Install ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Ubuntu)")
-        if not ytdlp_ok:
-            print("   → Install yt-dlp: brew install yt-dlp or pip install -U yt-dlp")
+    core_ready = ffmpeg_ok and ytdlp_ok and pillow_ok
+    full_ready = core_ready and whisper_ok
 
-    if not whisper_ok:
-        print("   → To enable speech transcription: pip install faster-whisper")
+    if full_ready:
+        print("Status: FULL SYSTEM READY!")
+        print("Video downloading, visual keyframes, and speech transcription are fully operational.")
+    elif core_ready:
+        print("Status: PARTIAL (visual only - speech transcription disabled)")
+        print("Video download and visual keyframe extraction are ready.")
+        print("To enable speech transcription: pip install '.[speech]'")
+    else:
+        print("Status: ACTION REQUIRED!")
+        if not ffmpeg_ok:
+            print("  - Install ffmpeg: brew install ffmpeg (macOS) or apt install ffmpeg (Ubuntu)")
+        if not ytdlp_ok:
+            print("  - Install yt-dlp: brew install yt-dlp or pip install -U yt-dlp")
+        if not pillow_ok:
+            print("  - Install Pillow: pip install Pillow")
 
     print("=" * 60)
 
@@ -119,5 +139,6 @@ def run_doctor() -> Dict[str, Any]:
         "faster_whisper": whisper_ok,
         "pillow": pillow_ok,
         "imagehash": imghash_ok,
-        "core_ready": ready,
+        "core_ready": core_ready,
+        "full_ready": full_ready,
     }

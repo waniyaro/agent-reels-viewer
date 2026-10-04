@@ -33,10 +33,13 @@ cache/
 *.jpg
 *.jpeg
 *.png
+test_*
+tests_tmp*
 
-# Cookies and sensitive data
+# Cookies and sensitive credentials
+cookies*.txt
+*.cookies
 *.cookies.txt
-cookies.txt
 .env
 
 # OS

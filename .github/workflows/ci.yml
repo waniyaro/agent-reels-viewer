@@ -8,14 +8,16 @@ on:
   schedule:
     # Daily canary run at 06:00 UTC to verify extractors haven't broken
     - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
+    name: Test (${{ matrix.os }} - Py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
@@ -26,18 +28,25 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Install system dependencies (ffmpeg)
+    - name: Install system dependencies (ffmpeg) on Linux
+      if: runner.os == 'Linux'
       run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          sudo apt update && sudo apt install -y ffmpeg
-        elif [ "$RUNNER_OS" == "macOS" ]; then
-          brew install ffmpeg
-        fi
+        sudo apt update && sudo apt install -y ffmpeg
 
-    - name: Install dependencies
+    - name: Install system dependencies (ffmpeg) on macOS
+      if: runner.os == 'macOS'
+      run: |
+        brew install ffmpeg
+
+    - name: Install system dependencies (ffmpeg) on Windows
+      if: runner.os == 'Windows'
+      run: |
+        choco install ffmpeg
+
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install ".[all]"
 
     - name: Run Doctor check
       run: |
@@ -46,3 +55,28 @@ jobs:
     - name: Run Unit Tests
       run: |
         python -m unittest discover tests
+
+  live-canary:
+    name: Live Canary Extraction Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install ffmpeg
+      run: |
+        sudo apt update && sudo apt install -y ffmpeg
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ".[all]"
+
+    - name: Run live canary test on public Short
+      run: |
+        python scripts/viewer.py inspect "https://www.youtube.com/shorts/RRqwSLMK1hQ" --no-speech --json

@@ -127,6 +127,20 @@ Once installed, your agent will automatically invoke `agent-reels-viewer` whenev
 
 ---
 
+## 📊 Platform Verification Status
+
+| Platform / Feature | Status | Notes & Verification Proof |
+| :--- | :---: | :--- |
+| **YouTube Shorts / Clips** | **Verified (Pass)** | Tested live on multiple videos (including *Steve Jobs Stanford Speech* and coding meme). Speech transcribed via `faster-whisper` + keyframes extracted. |
+| **TikTok Videos** | **Partially Verified (1 clip tested)** | Tested live on 1 TikTok clip (24s). Music-only track correctly detected by VAD (`has_speech: false`) with 0 hallucinations. |
+| **Instagram Reels** | **Unverified with Cookies** | Обработка отсутствия cookies проверена (возвращает `NEEDS_COOKIES`); работа с реальными cookies не проверена. |
+| **Second-Pass Zoom (`frames`)** | **Verified (Pass)** | Tested live on cached sessions (`--from-sec` / `--to-sec`). Generates high-cadence zoom frames from local session. |
+| **Auto-cleanup (24h TTL)** | **Verified (Pass)** | Integrated into CLI startup; tests pass. |
+| **Environment & Python** | **Verified** | Tested locally on macOS ARM64 (Python 3.14); Ubuntu tested in CI (Python 3.10, 3.11, 3.12). |
+| **Windows Execution** | **Pending CI Run** | Added `windows-latest` to GitHub Actions workflow matrix; pending run. |
+
+---
+
 ## 🛡️ Security & Prompt Injection Defense
 
 Social media videos are untrusted external inputs. `agent-reels-viewer`:

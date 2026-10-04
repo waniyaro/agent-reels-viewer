@@ -23,12 +23,34 @@ except ImportError:
 
 def get_ffmpeg_path() -> Optional[str]:
     """Find ffmpeg binary."""
-    return shutil.which("ffmpeg") or shutil.which("/Users/waniyaro/.local/bin/ffmpeg")
+    path = shutil.which("ffmpeg")
+    if not path:
+        for c in [
+            os.path.expanduser("~/.local/bin/ffmpeg"),
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg",
+        ]:
+            if os.path.exists(c):
+                path = c
+                break
+    return path
 
 
 def get_ffprobe_path() -> Optional[str]:
     """Find ffprobe binary."""
-    return shutil.which("ffprobe") or shutil.which("/Users/waniyaro/.local/bin/ffprobe")
+    path = shutil.which("ffprobe")
+    if not path:
+        for c in [
+            os.path.expanduser("~/.local/bin/ffprobe"),
+            "/opt/homebrew/bin/ffprobe",
+            "/usr/local/bin/ffprobe",
+            "/usr/bin/ffprobe",
+        ]:
+            if os.path.exists(c):
+                path = c
+                break
+    return path
 
 
 def get_video_duration(video_path: str) -> float:
@@ -50,12 +72,10 @@ def get_video_duration(video_path: str) -> float:
         except Exception:
             pass
 
-    # Fallback to ffmpeg -i
     ffmpeg = get_ffmpeg_path()
     if ffmpeg:
         try:
             res = subprocess.run([ffmpeg, "-i", video_path], capture_output=True, text=True, timeout=10)
-            # Look for Duration: 00:00:15.30
             m = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", res.stderr)
             if m:
                 hrs, mins, secs = m.groups()
@@ -66,32 +86,35 @@ def get_video_duration(video_path: str) -> float:
     return 0.0
 
 
-def deduplicate_frames(frame_paths: List[str], max_distance: int = 6) -> List[str]:
-    """Filter out near-duplicate consecutive frames using perceptual hashing."""
-    if not frame_paths or not (PIL_AVAILABLE and IMAGEHASH_AVAILABLE):
-        return frame_paths
+def deduplicate_frames(
+    frames: List[Tuple[float, str]],
+    max_distance: int = 6,
+) -> List[Tuple[float, str]]:
+    """Filter out near-duplicate consecutive frames using perceptual hashing.
+    Preserves true PTS timestamps for surviving frames."""
+    if not frames or not (PIL_AVAILABLE and IMAGEHASH_AVAILABLE):
+        return frames
 
-    kept = [frame_paths[0]]
+    kept = [frames[0]]
     try:
-        prev_hash = imagehash.phash(Image.open(frame_paths[0]))
+        prev_hash = imagehash.phash(Image.open(frames[0][1]))
     except Exception:
-        return frame_paths
+        return frames
 
-    for p in frame_paths[1:]:
+    for pts, p in frames[1:]:
         try:
             curr_hash = imagehash.phash(Image.open(p))
             diff = curr_hash - prev_hash
             if diff >= max_distance:
-                kept.append(p)
+                kept.append((pts, p))
                 prev_hash = curr_hash
             else:
-                # Remove duplicate file from disk to save space
                 try:
                     os.remove(p)
                 except OSError:
                     pass
         except Exception:
-            kept.append(p)
+            kept.append((pts, p))
 
     return kept
 
@@ -99,14 +122,11 @@ def deduplicate_frames(frame_paths: List[str], max_distance: int = 6) -> List[st
 def extract_keyframes(
     video_path: str,
     output_dir: str,
-    max_frames: int = 14,
+    max_frames: Optional[int] = None,
     has_speech: bool = True,
 ) -> List[Tuple[float, str]]:
-    """Extract representative scene keyframes.
-    
-    If video has speech: relies on scene changes + key interval.
-    If video has no speech (visual meme / music only): samples more frequently (adaptive).
-    Returns list of (timestamp_seconds, frame_filepath).
+    """Extract scene keyframes using hybrid scene detection + adaptive cadence floor.
+    Uses real PTS timestamps extracted from FFmpeg showinfo filter.
     """
     ffmpeg = get_ffmpeg_path()
     if not ffmpeg:
@@ -114,70 +134,106 @@ def extract_keyframes(
 
     frames_dir = os.path.join(output_dir, "frames")
     os.makedirs(frames_dir, exist_ok=True)
+    # Clear any previous frame files
+    for old_f in glob.glob(os.path.join(frames_dir, "frame_*.jpg")):
+        try:
+            os.remove(old_f)
+        except OSError:
+            pass
+    for old_raw in glob.glob(os.path.join(frames_dir, "raw_frame_*.jpg")):
+        try:
+            os.remove(old_raw)
+        except OSError:
+            pass
 
     duration = get_video_duration(video_path)
     if duration <= 0:
-        duration = 30.0  # reasonable fallback
+        duration = 30.0
 
-    # Adaptive interval: if no speech, sample more aggressively
-    step = 2.0 if not has_speech else max(2.5, duration / max_frames)
-    
-    # Scene detection filter:
-    # Captures significant scene cuts or periodic fallbacks
-    # Scale to max 768px along height or width, preserving vertical aspect ratio
+    if not has_speech:
+        step = 1.5
+        default_cap = 20
+    else:
+        step = max(3.0, duration / 12.0)
+        default_cap = 12
+
+    if max_frames is not None:
+        effective_max = max(1, max_frames)
+    else:
+        effective_max = default_cap
+
     scale_filter = "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'"
-    
-    # 1. First pass: extract by scene cuts or periodic fps
-    pattern = os.path.join(frames_dir, "frame_%03d.jpg")
-    
-    # If duration is short (< 60s), sample every `step` seconds
-    fps_val = 1.0 / step
-    filter_expr = f"fps={fps_val:.3f},{scale_filter}"
+    raw_pattern = os.path.join(frames_dir, "raw_frame_%04d.jpg")
+
+    # Hybrid filter: scene cut (> 0.3) OR cadence floor (step).
+    # showinfo outputs accurate pts_time in stderr.
+    filter_expr = f"select='isnan(prev_selected_t)+gt(scene,0.3)+gte(t-prev_selected_t,{step:.2f})',{scale_filter},showinfo"
 
     cmd = [
         ffmpeg,
         "-y",
         "-i", video_path,
         "-vf", filter_expr,
+        "-fps_mode", "vfr",
+        "-pix_fmt", "yuvj420p",
         "-q:v", "3",
-        pattern,
+        raw_pattern,
     ]
 
     try:
-        subprocess.run(cmd, capture_output=True, timeout=40)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except Exception:
         return []
 
-    raw_frames = sorted(glob.glob(os.path.join(frames_dir, "frame_*.jpg")))
-    if not raw_frames:
+    # Parse PTS time from showinfo lines in stderr
+    pts_map = {}
+    for line in proc.stderr.splitlines():
+        m = re.search(r"n:\s*(\d+)\s+pts:\s*\d+\s+pts_time:([0-9.]+)", line)
+        if m:
+            pts_map[int(m.group(1))] = float(m.group(2))
+
+    raw_files = sorted(glob.glob(os.path.join(frames_dir, "raw_frame_*.jpg")))
+    if not raw_files:
         return []
 
-    # Optional deduplication
-    filtered_frames = deduplicate_frames(raw_frames)
+    frames_with_pts: List[Tuple[float, str]] = []
+    for idx, fpath in enumerate(raw_files):
+        pts = pts_map.get(idx, round(idx * (duration / max(1, len(raw_files))), 2))
+        frames_with_pts.append((pts, fpath))
 
-    # Cap to max_frames
-    if len(filtered_frames) > max_frames:
-        indices = [int(i * (len(filtered_frames) - 1) / (max_frames - 1)) for i in range(max_frames)]
-        to_keep = set([filtered_frames[i] for i in indices])
-        for f in filtered_frames:
-            if f not in to_keep:
+    # Deduplicate near-identical frames (perceptual hashing)
+    filtered = deduplicate_frames(frames_with_pts)
+
+    # Cap to effective_max if needed, preserving spacing and real PTS
+    if len(filtered) > effective_max:
+        if effective_max == 1:
+            indices = [0]
+        else:
+            indices = [int(round(i * (len(filtered) - 1) / (effective_max - 1))) for i in range(effective_max)]
+
+        to_keep_indices = set(indices)
+        selected_frames = []
+        for i, item in enumerate(filtered):
+            if i in to_keep_indices:
+                selected_frames.append(item)
+            else:
                 try:
-                    os.remove(f)
+                    os.remove(item[1])
                 except OSError:
                     pass
-        filtered_frames = sorted(list(to_keep))
+        filtered = selected_frames
 
-    # Rename with timestamp info for clarity: frame_01_00-04s.jpg
-    final_results = []
-    total_count = len(filtered_frames)
-    for idx, fpath in enumerate(filtered_frames):
-        ts = round(idx * (duration / max(1, total_count)), 1)
-        mins = int(ts // 60)
-        secs = int(ts % 60)
+    # Rename with final zero-padded index and real PTS timestamp
+    final_results: List[Tuple[float, str]] = []
+    for idx, (pts, fpath) in enumerate(filtered):
+        pts_rounded = round(pts, 1)
+        mins = int(pts_rounded // 60)
+        secs = int(pts_rounded % 60)
         ts_str = f"{mins:02d}-{secs:02d}s"
-        new_name = os.path.join(frames_dir, f"frame_{idx+1:02d}_{ts_str}.jpg")
-        os.rename(fpath, new_name)
-        final_results.append((ts, new_name))
+        final_name = os.path.join(frames_dir, f"frame_{idx+1:02d}_{ts_str}.jpg")
+        if fpath != final_name:
+            os.rename(fpath, final_name)
+        final_results.append((pts_rounded, final_name))
 
     return final_results
 
@@ -199,7 +255,7 @@ def extract_range_frames(
     os.makedirs(range_dir, exist_ok=True)
 
     duration = max(0.5, end_sec - start_sec)
-    fps_val = count / duration
+    fps_val = max(1, count) / duration
 
     scale_filter = "scale=1080:-2" if hires else "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'"
     pattern = os.path.join(range_dir, "zoom_%03d.jpg")

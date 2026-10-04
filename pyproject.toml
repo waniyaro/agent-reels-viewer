@@ -31,6 +31,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+speech = [
+    "faster-whisper>=1.0.0",
+    "imagehash>=4.3.1",
+]
 audio = [
     "faster-whisper>=1.0.0",
 ]
@@ -44,3 +48,7 @@ all = [
 
 [project.scripts]
 agent-reels-viewer = "scripts.viewer:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scripts*"]

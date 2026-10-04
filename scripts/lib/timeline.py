@@ -17,8 +17,9 @@ def assemble_timeline(
     meta: Dict[str, Any],
     keyframes: List[Tuple[float, str]],
     speech_segments: List[Dict[str, Any]],
-    has_speech: bool,
+    has_speech: Optional[bool],
     transcription_status: str,
+    speech_status: str = "ok",
 ) -> str:
     """Build structured timeline.md artifact linking frames and audio chronologically."""
     timeline_path = os.path.join(output_dir, "timeline.md")
@@ -36,6 +37,18 @@ def assemble_timeline(
     likes = meta.get("like_count") or 0
     track_name = meta.get("track") or meta.get("music_title") or "Original audio"
 
+    # Human-readable speech status label
+    if speech_status == "ok":
+        speech_label = "Spoken dialogue present"
+    elif speech_status == "skipped":
+        speech_label = "Speech analysis skipped (--no-speech)"
+    elif speech_status == "timeout":
+        speech_label = "Speech analysis timed out (execution limit exceeded)"
+    elif speech_status == "error":
+        speech_label = f"Speech analysis unavailable: {transcription_status or 'error'}; install faster-whisper (pip install '.[speech]')"
+    else:
+        speech_label = "No spoken speech detected (music/visual only)"
+
     lines = []
     lines.append(f"# Video Inspection: {title[:80]}")
     lines.append("")
@@ -51,7 +64,7 @@ def assemble_timeline(
     if views or likes:
         lines.append(f"- **Engagement**: {views:,} views | {likes:,} likes")
     lines.append(f"- **Soundtrack**: {track_name}")
-    lines.append(f"- **Speech Status**: {'Spoken dialogue present' if has_speech else 'No spoken speech detected (music/visual only)'}")
+    lines.append(f"- **Speech Status**: {speech_label}")
     lines.append(f"- **Diagnostics**: {transcription_status}")
     lines.append("")
 
@@ -78,15 +91,9 @@ def assemble_timeline(
             "text": s["text"],
         })
 
-    # Sort all events chronologically
     events.sort(key=lambda x: x["time"])
 
-    # Aggregate into rows
     rows = []
-    current_time_slot = -1.0
-    current_frame = ""
-    current_speech = []
-
     for ev in events:
         t_label = format_timestamp(ev["time"])
         if ev["type"] == "frame":
@@ -106,6 +113,12 @@ def assemble_timeline(
     if speech_segments:
         for s in speech_segments:
             lines.append(f"- `[{format_timestamp(s['start'])} - {format_timestamp(s['end'])}]`: {s['text']}")
+    elif speech_status == "skipped":
+        lines.append("*(Speech analysis skipped by user flag --no-speech)*")
+    elif speech_status == "timeout":
+        lines.append("*(Speech analysis timed out — audio processing exceeded time limit. Visual frames are preserved above)*")
+    elif speech_status == "error":
+        lines.append(f"*(Speech analysis unavailable: {transcription_status or 'error'}. Install faster-whisper: pip install '.[speech]')*")
     else:
         lines.append("*(No spoken transcript available — please analyze visual frames for on-screen text, meme hooks, and actions)*")
 
