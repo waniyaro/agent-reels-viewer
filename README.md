@@ -48,8 +48,8 @@ flowchart TD
 
 ### Key Architectural Decisions:
 1. **The skill produces artifacts, not LLM calls**: The CLI generates clean local files (`timeline.md`, `frames/`, `meta.json`). The hosting agent uses its own built-in vision and file-reading tools to inspect them. **No extra API keys or monthly subscriptions required.**
-2. **Real PTS Presentation Timestamps**: Frame timestamps are extracted directly from FFmpeg `showinfo` output (`pts_time`), ensuring perfect alignment between speech timestamps and visual scene transitions.
-3. **Pure Pillow Deduplication**: Image perceptual difference hashing (dHash) and luminance checks are implemented directly on Pillow, removing heavy dependencies on `scipy` or `imagehash`.
+2. **Real PTS Presentation Timestamps**: Frame timestamps are extracted directly from FFmpeg `showinfo` output (`pts_time`), accurately matching speech timestamps and visual scene transitions.
+3. **Pixel-Difference Keyframe Deduplication**: Compares downscaled 128px grayscale frame signatures to eliminate duplicate frames while retaining fine on-screen text typing and subtle UI edits.
 4. **Isolated Process Transcription with Hard Timeout**: Transcription executes in an isolated worker process with hard OS timeouts (`max(30, 3*duration)`), preventing Python thread hangs. Model weights are cached outside the timeout window.
 5. **Adaptive Frame Density**: Silent/music-only clips receive more frequent keyframes (1.5s step, cap 20) to capture on-screen text and fast scene cuts. Talking-head clips use conversational cadence (3.5s step, cap 12).
 
@@ -144,16 +144,16 @@ ln -s "$(pwd)" ~/.claude/skills/agent-reels-viewer
 ---
 
 ## Platform Verification Status
-
+ 
 | Platform / Feature | Status | Verification Details |
 | :--- | :---: | :--- |
-| **YouTube Shorts / Clips** | **Verified (Pass)** | Tested live on multiple videos (including *Steve Jobs Stanford Speech*, Fireship *Python in 100s*, and vertical coding memes). Real speech transcribed via `faster-whisper` + scene keyframes extracted. |
-| **Local Video Files (`.mp4`)** | **Verified (Pass)** | Tested on local files; skips URL downloading, analyzes container audio streams, extracts keyframes and builds `timeline.md`. |
-| **TikTok Videos** | **Partially Verified (1 clip tested)** | Tested live on 1 TikTok clip (24s). Music-only track correctly detected by VAD (`has_speech: false`) with 0 hallucinations. |
-| **Instagram Reels** | **Unverified with Cookies** | Missing cookies error handling is verified (`NEEDS_COOKIES`); extraction with real user cookies has not yet been verified. |
-| **Second-Pass Zoom (`frames`)** | **Verified (Pass)** | Tested live on cached sessions (`--from-sec` / `--to-sec`). Generates high-cadence zoom frames from local session. |
-| **Environment & Python** | **Verified** | Tested locally on macOS ARM64 (Python 3.14); Ubuntu & macOS tested in CI (Python 3.10, 3.11, 3.12). Python 3.14 has not yet been tested in GitHub Actions. |
-| **Windows Execution** | **Pending CI Run** | Added `windows-latest` to GitHub Actions workflow matrix; pending run. |
+| **YouTube Shorts / Clips** | **Verified** | Tested locally on multiple real videos (`RRqwSLMK1hQ` vertical coding meme with on-screen text, `8Zx04h24uBs` Steve Jobs speech, `x7X9w_GIm1s` Fireship). Real speech transcribed via `faster-whisper` + scene keyframes extracted. |
+| **Local Video Files (`.mp4`)** | **Verified (Synthetic Fixtures Only)** | Tested locally on synthetic video fixtures (`testsrc` with audio tone, Pillow generated text frames); skips URL downloading, analyzes container audio streams, extracts keyframes and builds `timeline.md`. |
+| **TikTok Videos** | **Partially Verified (1 clip tested)** | Tested locally on 1 TikTok clip (`7106594312292453675`, 24s). Music-only track correctly detected by VAD (`has_speech: false`). |
+| **Instagram Reels** | **Unverified with Cookies** | Missing cookies error handling is verified (`NEEDS_COOKIES`); extraction with real user cookies has not been verified. |
+| **Second-Pass Zoom (`frames`)** | **Verified** | Tested locally on both downloaded video sessions and local file sessions (`--from-sec` / `--to-sec`). |
+| **Environment & OS Support** | **macOS verified locally; CI pending** | Verified locally on macOS ARM64 (Python 3.14). Multi-platform workflow configured for Ubuntu, Windows, and macOS (Python 3.10–3.13); результаты CI ещё не получены. |
+| **Windows Execution** | **Не проверено (результаты CI ещё не получены)** | Windows environment has not been tested locally; CI run pending. |
 
 > **Note on CI Live Canary**: Social platforms like YouTube and Instagram aggressively challenge data center IPs (such as GitHub Actions runners). In CI, the `live-canary` job is configured with `continue-on-error: true` so data center IP blocks do not fail build validation.
 

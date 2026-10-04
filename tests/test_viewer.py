@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from agent_reels_viewer.audio import extract_audio, transcribe_audio
-from agent_reels_viewer.cli import auto_clean_old_sessions, cmd_inspect
+from agent_reels_viewer.cli import auto_clean_old_sessions, cmd_frames, cmd_inspect
 from agent_reels_viewer.downloader import (
     MAX_DURATION_SECONDS,
     detect_platform,
@@ -21,6 +21,7 @@ from agent_reels_viewer.downloader import (
 )
 from agent_reels_viewer.timeline import assemble_timeline, format_timestamp
 from agent_reels_viewer.video import (
+    deduplicate_frames,
     extract_keyframes,
     extract_range_frames,
     get_ffmpeg_path,
@@ -215,6 +216,36 @@ class TestLocalFileInspection(unittest.TestCase):
         self.assertEqual(data.get("platform"), "local")
         self.assertEqual(data.get("video_path"), self.local_mp4)
         self.assertTrue(os.path.exists(data.get("timeline_path")))
+
+        # Check meta.json contains source_path
+        meta_file = os.path.join(out_session, "meta.json")
+        self.assertTrue(os.path.exists(meta_file))
+        with open(meta_file, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        self.assertEqual(meta.get("source_path"), self.local_mp4)
+
+    def test_local_file_not_found_returns_error_code(self):
+        import argparse
+        args = argparse.Namespace(
+            url=os.path.join(self.temp_dir, "non_existent_clip.mp4"),
+            json=True,
+            cookies=None,
+            output=None,
+            mode="standard",
+            model="base",
+            no_speech=False,
+            max_frames=None,
+            no_video=False,
+            whisper_timeout=None,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            exit_code = cmd_inspect(args)
+            stdout_str = mock_out.getvalue()
+
+        self.assertEqual(exit_code, 1)
+        data = json.loads(stdout_str)
+        self.assertEqual(data.get("status"), "error")
+        self.assertEqual(data.get("error_code"), "LOCAL_FILE_NOT_FOUND")
 
 
 class TestSafeAutoClean(unittest.TestCase):
@@ -464,6 +495,157 @@ class TestKeyframeAdaptiveDensity(unittest.TestCase):
         dir_speech = os.path.join(self.temp_dir, "speech")
         frames_speech, _, _, _ = extract_keyframes(self.video_path, dir_speech, has_speech=True)
         self.assertLess(len(frames_speech), len(frames_silent))
+
+
+class TestPixelDifferenceDeduplication(unittest.TestCase):
+    """Test downscaled grayscale pixel-difference deduplication behavior."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_deduplicate_fixture_identical_vs_text_change(self):
+        """Fixture test: two white frames with text added in second -> both preserved.
+        Two identical frames -> one removed."""
+        from PIL import Image, ImageDraw
+
+        f1_path = os.path.join(self.temp_dir, "frame_01.jpg")
+        im1 = Image.new("RGB", (640, 360), color=(255, 255, 255))
+        im1.save(f1_path, "JPEG")
+
+        # f2 is an identical white frame
+        f2_path = os.path.join(self.temp_dir, "frame_02.jpg")
+        im1.save(f2_path, "JPEG")
+
+        # f3 has base text
+        f3_path = os.path.join(self.temp_dir, "frame_03.jpg")
+        im3 = Image.new("RGB", (640, 360), color=(255, 255, 255))
+        draw3 = ImageDraw.Draw(im3)
+        draw3.text((100, 100), "print('Welcom')", fill=(0, 0, 0))
+        im3.save(f3_path, "JPEG")
+
+        # f4 has a single symbol added ('e') simulating editor typing
+        f4_path = os.path.join(self.temp_dir, "frame_04.jpg")
+        im4 = Image.new("RGB", (640, 360), color=(255, 255, 255))
+        draw4 = ImageDraw.Draw(im4)
+        draw4.text((100, 100), "print('Welcome')", fill=(0, 0, 0))
+        im4.save(f4_path, "JPEG")
+
+        # 1. Identical frames: second frame must be dropped
+        kept_identical = deduplicate_frames([(0.0, f1_path), (0.5, f2_path)], is_dense_mode=True)
+        self.assertEqual(len(kept_identical), 1)
+        self.assertEqual(kept_identical[0][1], f1_path)
+
+        # 2. Text modification (Welcom -> Welcome): both frames must be kept
+        kept_text = deduplicate_frames([(1.0, f3_path), (1.5, f4_path)], is_dense_mode=True)
+        self.assertEqual(len(kept_text), 2)
+        self.assertEqual(kept_text[0][1], f3_path)
+        self.assertEqual(kept_text[1][1], f4_path)
+
+
+class TestCmdFrames(unittest.TestCase):
+    """Test cmd_frames for downloaded sessions and local file sessions."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.video_path = os.path.join(self.temp_dir, "test_clip.mp4")
+        ffmpeg = get_ffmpeg_path()
+        if ffmpeg:
+            cmd = [
+                ffmpeg, "-y",
+                "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=10",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                self.video_path,
+            ]
+            subprocess.run(cmd, capture_output=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_frames_downloaded_session(self):
+        """Case 1: video.mp4 is directly inside the session folder."""
+        if not os.path.exists(self.video_path):
+            self.skipTest("FFmpeg fixture missing")
+
+        session_dir = os.path.join(self.temp_dir, "session_downloaded")
+        os.makedirs(session_dir, exist_ok=True)
+        shutil.copy(self.video_path, os.path.join(session_dir, "video.mp4"))
+
+        import argparse
+        args = argparse.Namespace(
+            target=session_dir,
+            from_sec=1.0,
+            to_sec=3.0,
+            count=3,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = cmd_frames(args)
+            output = mock_out.getvalue()
+
+        self.assertEqual(code, 0)
+        data = json.loads(output)
+        self.assertEqual(data.get("status"), "success")
+        self.assertEqual(data.get("frames_extracted"), 3)
+
+    def test_frames_local_file_session(self):
+        """Case 2: video is external; session folder only contains meta.json with source_path."""
+        if not os.path.exists(self.video_path):
+            self.skipTest("FFmpeg fixture missing")
+
+        session_dir = os.path.join(self.temp_dir, "session_local")
+        os.makedirs(session_dir, exist_ok=True)
+        meta = {
+            "id": "local_abc",
+            "title": "test_clip.mp4",
+            "source_path": self.video_path,
+            "duration": 4.0,
+        }
+        with open(os.path.join(session_dir, "meta.json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+
+        import argparse
+        args = argparse.Namespace(
+            target=session_dir,
+            from_sec=1.0,
+            to_sec=3.0,
+            count=3,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            code = cmd_frames(args)
+            output = mock_out.getvalue()
+
+        self.assertEqual(code, 0)
+        data = json.loads(output)
+        self.assertEqual(data.get("status"), "success")
+        self.assertEqual(data.get("frames_extracted"), 3)
+
+    def test_frames_video_not_found(self):
+        """Case 3: Session folder has no video and no valid source_path -> VIDEO_NOT_FOUND."""
+        session_dir = os.path.join(self.temp_dir, "empty_session")
+        os.makedirs(session_dir, exist_ok=True)
+
+        import argparse
+        args = argparse.Namespace(
+            target=session_dir,
+            from_sec=1.0,
+            to_sec=3.0,
+            count=3,
+            hires=False,
+            output=None,
+            json=True,
+        )
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            code = cmd_frames(args)
+
+        self.assertEqual(code, 1)
 
 
 class TestLimitsAndConstants(unittest.TestCase):

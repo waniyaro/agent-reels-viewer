@@ -3,7 +3,7 @@ name: agent-reels-viewer
 version: "0.1.0"
 description: "Inspect, watch, and understand Instagram Reels, TikTok videos, YouTube Shorts, and local clips. Extracts audio transcripts, chronological scene keyframes, on-screen text, and generates a structured timeline artifact for multimodal analysis."
 argument-hint: 'agent-reels-viewer inspect https://... | agent-reels-viewer inspect /path/to/video.mp4'
-allowed-tools: Bash, Read, Write, WebSearch
+allowed-tools: Bash, Read
 homepage: https://github.com/waniyaro/agent-reels-viewer
 repository: https://github.com/waniyaro/agent-reels-viewer
 author: waniyaro
@@ -58,7 +58,18 @@ python3 scripts/viewer.py inspect "<URL_OR_FILE>" --json
 
 ---
 
-## 2. Structured JSON Output & Agent Decision Matrix
+## 2. Recommended Multimodal Workflow
+
+When a user provides a video link or file:
+1. **Run inspection**: Execute `agent-reels-viewer inspect "<URL_OR_FILE>" --json`.
+2. **Read timeline artifact**: Open and read the file specified in `timeline_path` using your file viewing/reading tool to examine metadata, speech status, audio dialogue, and the chronological scene summary.
+3. **Open keyframes**: Inspect extracted keyframes from the `frames/` folder (view all if count <= 12) using your image viewer tool to examine visual contents, code editor text, memes, diagrams, or on-screen captions.
+4. **Targeted zoom (if needed)**: If critical text, small code symbols, or rapid UI movements are unclear, run `agent-reels-viewer frames "<SESSION_ID>" --from-sec <X> --to-sec <Y> --count 6 --hires --json` and inspect the high-resolution zoom frames.
+5. **Formulate response**: Answer the user's inquiry directly, clearly distinguishing direct visual and audio observations from inferences.
+
+---
+
+## 3. Structured JSON Output & Agent Decision Matrix
 
 The command outputs compact JSON:
 ```json
@@ -95,7 +106,7 @@ The command outputs compact JSON:
 
 ---
 
-## 3. Second-Pass Zoom (On-Demand Frame Extraction)
+## 4. Second-Pass Zoom (On-Demand Frame Extraction)
 
 If the user asks about a specific moment or needs to read fine UI text, code, or tiny diagrams:
 ```bash
@@ -104,7 +115,7 @@ agent-reels-viewer frames "session_abc123" --from-sec 12.0 --to-sec 18.0 --count
 
 ---
 
-## 4. Diagnostics & Error Codes
+## 5. Diagnostics & Error Codes
 
 Run environment diagnostics at any time:
 ```bash
@@ -113,13 +124,19 @@ agent-reels-viewer doctor
 agent-reels-viewer doctor --download-model --model base
 ```
 
-### Error Codes:
+### Complete Error Codes Reference:
+- `LOCAL_FILE_NOT_FOUND`: Target local file path does not exist on disk.
 - `FFMPEG_MISSING`: ffmpeg binary is not found in PATH or standard system paths.
-- `FRAME_EXTRACTION_FAILED`: FFmpeg crashed or could not extract keyframes.
-- `WHISPER_TIMEOUT`: Transcription exceeded time limit.
-- `LOCAL_FILE_NOT_FOUND`: Target local file path does not exist.
-- `INVALID_URL`: URL is unsupported, malformed, or targets a forbidden scheme/domain.
+- `YTDLP_MISSING`: yt-dlp binary is not found in PATH.
+- `INVALID_URL`: URL is unsupported, malformed, or targets an untrusted scheme/domain.
+- `DOWNLOAD_TIMEOUT`: Media download exceeded time limit.
+- `DOWNLOAD_FAILED`: Video download failed.
+- `AUDIO_EXTRACTION_FAILED`: FFmpeg failed to extract audio track.
+- `NO_AUDIO_STREAM`: Video container contains no audio stream.
+- `FRAME_EXTRACTION_FAILED`: FFmpeg failed to extract visual keyframes.
+- `VIDEO_NOT_FOUND`: Target video file was not found for second-pass zooming.
+- `WHISPER_TIMEOUT`: Audio speech transcription exceeded process timeout.
 - `NEEDS_COOKIES`: Platform requires authentication. Instruct user to supply cookies.txt.
 - `PRIVATE_VIDEO`: Video was deleted, made private, or is restricted.
 - `VIDEO_TOO_LONG`: Duration exceeds the 6-minute short-form limit.
-- `EXTRACTOR_BROKEN`: yt-dlp extractor needs updating (`yt-dlp -U`).
+- `EXTRACTOR_BROKEN`: Platform extractor outdated; update yt-dlp (`yt-dlp -U`).

@@ -122,67 +122,71 @@ def has_audio_stream(video_path: str) -> bool:
         except Exception:
             pass
 
-    return True  # Fallback assume audio stream present
+    return True
 
 
-def compute_dhash(image_path: str, hash_size: int = 8) -> int:
-    """Compute difference hash (dHash) using pure PIL without external dependencies."""
+def compute_frame_signature(image_path: str, target_width: int = 128) -> Optional[Tuple[bytes, Tuple[int, int]]]:
+    """Load image as downscaled grayscale bytes for precise pixel difference."""
     if not PIL_AVAILABLE:
-        return 0
-    with Image.open(image_path) as img:
-        resized = img.convert("L").resize((hash_size + 1, hash_size), Image.Resampling.BILINEAR)
-        pixels = resized.tobytes()
-        val = 0
-        for row in range(hash_size):
-            row_start = row * (hash_size + 1)
-            for col in range(hash_size):
-                val = (val << 1) | (1 if pixels[row_start + col] > pixels[row_start + col + 1] else 0)
-        return val
+        return None
+    try:
+        with Image.open(image_path) as img:
+            w, h = img.size
+            if w <= 0 or h <= 0:
+                return None
+            target_height = max(1, int(h * target_width / w))
+            resized = img.convert("L").resize((target_width, target_height), Image.Resampling.BILINEAR)
+            return resized.tobytes(), (target_width, target_height)
+    except Exception:
+        return None
 
 
-def hamming_distance(h1: int, h2: int) -> int:
-    """Compute bitwise Hamming distance between two 64-bit hashes."""
-    return bin(h1 ^ h2).count("1")
+def calculate_frame_difference(sig1: Tuple[bytes, Tuple[int, int]], sig2: Tuple[bytes, Tuple[int, int]], pixel_threshold: int = 16) -> float:
+    """Calculate the fraction of pixels with difference > pixel_threshold.
+    Returns float in range [0.0, 1.0]."""
+    bytes1, size1 = sig1
+    bytes2, size2 = sig2
+    if size1 != size2 or len(bytes1) != len(bytes2) or len(bytes1) == 0:
+        return 1.0
+    diff_count = sum(1 for p1, p2 in zip(bytes1, bytes2) if abs(p1 - p2) > pixel_threshold)
+    return diff_count / len(bytes1)
 
 
 def deduplicate_frames(
     frames: List[Tuple[float, str]],
-    max_distance: int = 2,
+    is_dense_mode: bool = False,
 ) -> List[Tuple[float, str]]:
-    """Filter out near-duplicate consecutive frames using pure Pillow dHash + luminance check."""
+    """Filter out near-duplicate consecutive frames using downscaled pixel difference.
+
+    In dense visual mode (speech_status none/skipped/error):
+      Only virtually identical frames (diff < 0.0002) are dropped, ensuring subtle text edits,
+      character typing, and meme punchlines are preserved.
+    In conversational mode (speech present):
+      Threshold is 0.015 to suppress static talking head frames.
+    """
     if not frames or not PIL_AVAILABLE or len(frames) <= 1:
         return frames
 
-    from PIL import ImageStat
-
+    threshold = 0.0002 if is_dense_mode else 0.015
     kept = [frames[0]]
-    try:
-        with Image.open(frames[0][1]) as im0:
-            prev_luma = ImageStat.Stat(im0.convert("L")).mean[0]
-            prev_hash = compute_dhash(frames[0][1])
-    except Exception:
-        return frames
+    prev_sig = compute_frame_signature(frames[0][1])
 
-    for pts, p in frames[1:]:
-        try:
-            with Image.open(p) as curr_im:
-                curr_luma = ImageStat.Stat(curr_im.convert("L")).mean[0]
-                curr_hash = compute_dhash(p)
+    for pts, fpath in frames[1:]:
+        curr_sig = compute_frame_signature(fpath)
+        if prev_sig is None or curr_sig is None:
+            kept.append((pts, fpath))
+            prev_sig = curr_sig
+            continue
 
-            dist = hamming_distance(curr_hash, prev_hash)
-            luma_diff = abs(curr_luma - prev_luma)
-
-            if dist >= max_distance or luma_diff >= 20.0:
-                kept.append((pts, p))
-                prev_hash = curr_hash
-                prev_luma = curr_luma
-            else:
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
-        except Exception:
-            kept.append((pts, p))
+        diff = calculate_frame_difference(prev_sig, curr_sig)
+        if diff >= threshold:
+            kept.append((pts, fpath))
+            prev_sig = curr_sig
+        else:
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
 
     return kept
 
@@ -293,8 +297,8 @@ def extract_keyframes(
 
     timestamp_type = "exact" if all_pts_exact else "approximate"
 
-    # Deduplicate near-identical frames using pure Pillow dHash
-    filtered = deduplicate_frames(frames_with_pts)
+    # Deduplicate near-identical frames using downscaled pixel difference
+    filtered = deduplicate_frames(frames_with_pts, is_dense_mode=(not has_speech))
 
     # Cap to effective_max if needed
     if len(filtered) > effective_max:

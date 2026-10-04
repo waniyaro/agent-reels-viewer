@@ -8,6 +8,7 @@ import os
 import shutil
 import sys
 import time
+import urllib.parse
 from typing import Optional
 
 from agent_reels_viewer.audio import extract_audio, transcribe_audio
@@ -102,6 +103,19 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     # 1. Validation
     if not is_local_file:
+        parsed_target = urllib.parse.urlparse(target)
+        if not parsed_target.scheme or parsed_target.scheme not in ("http", "https"):
+            res = {
+                "status": "error",
+                "error_code": "LOCAL_FILE_NOT_FOUND",
+                "message": f"Local video file not found at: {target}",
+            }
+            if args.json:
+                print(json.dumps(res))
+            else:
+                print(f"Error [LOCAL_FILE_NOT_FOUND]: {res['message']}", file=sys.stderr)
+            return 1
+
         is_valid, val_err_code, val_err_msg = validate_url(target)
         if not is_valid:
             res = {"status": "error", "error_code": val_err_code or "INVALID_URL", "message": val_err_msg}
@@ -142,6 +156,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
             "title": os.path.basename(video_path),
             "uploader": "local_user",
             "webpage_url": video_path,
+            "source_path": video_path,
             "duration": duration,
             "extractor_key": "LocalFile",
         }
@@ -318,6 +333,20 @@ def cmd_frames(args: argparse.Namespace) -> int:
                 if f.endswith((".mp4", ".mkv", ".webm")):
                     video_path = os.path.join(output_dir, f)
                     break
+
+    # If video file is not stored directly inside the session folder (e.g. for local video files),
+    # check source_path recorded in meta.json
+    if output_dir and (not video_path or not os.path.exists(video_path)):
+        meta_file = os.path.join(output_dir, "meta.json")
+        if os.path.isfile(meta_file):
+            try:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta_data = json.load(f)
+                src = meta_data.get("source_path")
+                if src and os.path.isfile(src):
+                    video_path = src
+            except Exception:
+                pass
 
     if not video_path or not os.path.exists(video_path):
         res = {

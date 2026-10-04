@@ -12,12 +12,20 @@ from agent_reels_viewer.video import get_ffmpeg_path, has_audio_stream
 
 
 def ensure_model_downloaded(model_size: str) -> Tuple[bool, str]:
-    """Ensure faster-whisper model weights are present in cache before starting transcription timer."""
+    """Ensure faster-whisper model weights are present in cache before starting transcription timer.
+    Checks local cache first (local_files_only=True) to avoid network calls and allow offline usage;
+    fetches from network only if not found locally.
+    """
     try:
         from faster_whisper import download_model
-        print(f"Ensuring Whisper '{model_size}' model is cached...", file=sys.stderr)
-        download_model(model_size)
-        return True, ""
+        try:
+            download_model(model_size, local_files_only=True)
+            return True, ""
+        except Exception:
+            # Model not cached locally; try downloading from network
+            print(f"Whisper model '{model_size}' not found locally. Downloading...", file=sys.stderr)
+            download_model(model_size, local_files_only=False)
+            return True, ""
     except ImportError:
         return False, "faster-whisper is not installed. Install with: pip install '.[speech]'"
     except Exception as e:
