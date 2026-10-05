@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lightweight multimodal agent skill to inspect and understand Instagram Reels, TikTok, and YouTube Shorts (audio + keyframes + timeline)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     { name = "waniyaro" }
 ]

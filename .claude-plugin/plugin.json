@@ -1,0 +1,28 @@
+{
+  "name": "agent-reels-viewer",
+  "version": "0.1.0",
+  "description": "Local-first multimodal video intelligence skill for AI agents (Claude Code, Antigravity, OpenClaw, Codex). Inspects, transcribes, zooms, and understands Instagram Reels, TikTok, YouTube Shorts, and local video.",
+  "author": {
+    "name": "waniyaro",
+    "url": "https://github.com/waniyaro"
+  },
+  "homepage": "https://github.com/waniyaro/agent-reels-viewer",
+  "repository": "https://github.com/waniyaro/agent-reels-viewer",
+  "license": "MIT",
+  "keywords": [
+    "video",
+    "reels",
+    "tiktok",
+    "shorts",
+    "multimodal",
+    "vision",
+    "transcription",
+    "claude-code"
+  ],
+  "skills": [
+    {
+      "name": "agent-reels-viewer",
+      "path": "skills/agent-reels-viewer/SKILL.md"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "name": "agent-reels-viewer",
+  "interface": {
+    "displayName": "Agent Reels Viewer"
+  },
+  "plugins": [
+    {
+      "name": "agent-reels-viewer",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/waniyaro/agent-reels-viewer"
+      },
+      "description": "Local-first multimodal video intelligence skill for AI agents. Inspects, transcribes, zooms, and understands Instagram Reels, TikTok, YouTube Shorts, and local video clips."
+    }
+  ]
+}
