@@ -284,7 +284,8 @@ def select_capped_frames(
     effective_max: int,
     duration: float,
 ) -> List[Tuple[float, str]]:
-    """Greedily select effective_max frames balancing visual shift, temporal gap, and suppression of tight clusters."""
+    """Partition [0, duration] into effective_max intervals and select the most significant frame
+    in each interval, preserving boundaries and filling empty intervals greedily."""
     if len(frames) <= effective_max:
         return list(frames)
     if effective_max <= 1:
@@ -293,32 +294,41 @@ def select_capped_frames(
         return [frames[0], frames[-1]]
 
     sigs = [compute_frame_signature(item[1]) for item in frames]
-    vis_scores = [0.0]
+    vis_scores = [1.0]
     for i in range(1, len(frames)):
         _, mean_d, ch_ratio = calculate_frame_metrics(sigs[i - 1], sigs[i]) if (sigs[i - 1] and sigs[i]) else (1.0, 1.0, 1.0)
         score = 0.5 * mean_d + 0.5 * ch_ratio
         vis_scores.append(score)
 
-    min_gap = max(0.5, duration / (2.0 * effective_max))
+    step = max(0.1, duration / effective_max)
+    buckets = [[] for _ in range(effective_max)]
+    for idx, (pts, _) in enumerate(frames):
+        b = min(int(pts / step), effective_max - 1)
+        buckets[b].append(idx)
+
     chosen = {0, len(frames) - 1}
 
+    # Step 1: For each interior interval, pick candidate with highest visual score
+    for b in range(1, effective_max - 1):
+        candidates = [idx for idx in buckets[b] if idx not in chosen]
+        if candidates:
+            best_idx = max(candidates, key=lambda i: vis_scores[i])
+            chosen.add(best_idx)
+
+    # Step 2: If empty intervals caused len(chosen) < effective_max, fill from remaining
     while len(chosen) < effective_max:
-        candidates = [i for i in range(1, len(frames) - 1) if i not in chosen]
-        if not candidates:
+        unselected = [i for i in range(len(frames)) if i not in chosen]
+        if not unselected:
             break
         best_cand = None
-        best_eff_score = -1e9
-        for c in candidates:
-            c_pts = frames[c][0]
-            min_dist = min(abs(c_pts - frames[sel][0]) for sel in chosen)
-            base_score = vis_scores[c]
-            if min_dist < min_gap:
-                eff_score = base_score * (min_dist / min_gap)
-            else:
-                eff_score = base_score + 0.2 * (min_dist / max(1.0, duration))
-            if eff_score > best_eff_score:
-                best_eff_score = eff_score
-                best_cand = c
+        best_gain = -1.0
+        for cand in unselected:
+            cand_pts = frames[cand][0]
+            min_dist = min(abs(cand_pts - frames[s][0]) for s in chosen)
+            gain = min_dist * (0.5 + 0.5 * vis_scores[cand])
+            if gain > best_gain:
+                best_gain = gain
+                best_cand = cand
         if best_cand is not None:
             chosen.add(best_cand)
         else:
@@ -408,7 +418,8 @@ def extract_keyframes(
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if proc.returncode != 0:
             err_tail = sanitize_stderr(proc.stderr)
-            return [], "exact", "FRAME_EXTRACTION_FAILED", f"FFmpeg error ({proc.returncode}): {err_tail}"
+            extra_hint = " (AV1 codec detected: ensure ffmpeg has libdav1d/libaom decoder enabled)" if ("av1" in proc.stderr.lower() or "dav1d" in proc.stderr.lower()) else ""
+            return [], "exact", "FRAME_EXTRACTION_FAILED", f"FFmpeg error ({proc.returncode}): {err_tail}{extra_hint}"
     except subprocess.TimeoutExpired:
         return [], "exact", "FRAME_EXTRACTION_FAILED", "Keyframe extraction timed out after 60s."
     except Exception as e:

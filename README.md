@@ -49,9 +49,10 @@ flowchart TD
 ### Key Architectural Decisions:
 1. **The skill produces artifacts, not LLM calls**: The CLI generates clean local files (`timeline.md`, `frames/`, `meta.json`). The hosting agent uses its own built-in vision and file-reading tools to inspect them. **No extra API keys or monthly subscriptions required.**
 2. **Real PTS Presentation Timestamps**: Frame timestamps are extracted directly from FFmpeg `showinfo` output (`pts_time`), accurately matching speech timestamps and visual scene transitions.
-3. **Tiled Block Keyframe Deduplication**: Downscales frames to 256px width (preserving aspect ratio) divided into a 16x16 tile grid. Evaluates the maximum fraction of differing pixels (intensity difference > 16) across tiles (max tile difference). Eliminates static duplicates and codec noise while reliably capturing subtle UI edits and single-character typing.
+3. **Interval-Bucket Keyframe Capping & Tiled Deduplication**: Partitions the video timeline into `effective_max` equal intervals to guarantee temporal coverage (maximum gap <= 2*duration/cap) while greedily retaining the most visually significant frame within each interval based on non-saturating tile difference metrics. Eliminates static duplicates and tight clustering while preserving subtle on-screen text edits.
 4. **Isolated Process Transcription with Hard Timeout**: Transcription executes in an isolated worker process with hard OS timeouts (`max(30, 3*duration)`), preventing Python thread hangs. Model weights are cached outside the timeout window.
 5. **Adaptive Frame Density**: Silent/music-only clips receive more frequent keyframes (1.5s step, cap 20) to capture on-screen text and fast scene cuts. Talking-head clips use conversational cadence (3.5s step, cap 12).
+6. **Codec Compatibility & H.264 Priority**: The media downloader explicitly prioritizes H.264 (`avc1`) in MP4 containers over AV1, ensuring universal hardware acceleration and compatibility across minimal FFmpeg distributions. The `doctor` diagnostic checks for AV1 decoders (`libdav1d`/`libaom`) and provides troubleshooting hints if AV1 decoding fails.
 
 ---
 

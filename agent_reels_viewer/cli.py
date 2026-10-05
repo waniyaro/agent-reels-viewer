@@ -345,6 +345,9 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     meta["keyframe_stats"] = kf_stats
     meta["estimated_image_tokens"] = estimated_image_tokens
     meta["frames_total"] = len(keyframes)
+    meta["has_speech"] = has_speech
+    meta["speech_status"] = speech_status
+    meta["speech_message"] = transcription_status
     try:
         with open(os.path.join(output_dir, "meta.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2, ensure_ascii=False)

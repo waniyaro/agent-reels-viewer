@@ -1042,12 +1042,60 @@ class TestHardeningRoundTwelve(unittest.TestCase):
                 f"Close pair 75.0 and 75.13 must not both be kept: {selected_pts}"
             )
 
-            # 4. Temporal intervals must be covered: no huge gap across the 100s timeline
+            # 4. Temporal intervals must be covered: no gap exceeds 2 * duration / cap
             gaps = [selected_pts[i+1] - selected_pts[i] for i in range(len(selected_pts) - 1)]
+            max_allowed_gap = 2.0 * duration / cap
             for gap in gaps:
-                self.assertLessEqual(gap, 30.0, f"Temporal gap {gap}s too large in {selected_pts}")
+                self.assertLessEqual(gap, max_allowed_gap + 0.1, f"Temporal gap {gap}s exceeds {max_allowed_gap}s in {selected_pts}")
         finally:
             shutil.rmtree(fixture_dir, ignore_errors=True)
+
+    def test_cap_handles_long_pause_in_middle(self):
+        """Verify interval capping on 17 frames with a 24s pause in the middle maintains max gap <= 2*duration/cap."""
+        from agent_reels_viewer.video import select_capped_frames
+        from PIL import Image
+
+        fixture_dir = tempfile.mkdtemp(prefix="test_cap_pause_")
+        try:
+            # 17 frames with a long pause between 26.0s and 50.0s (24s gap)
+            timestamps = [
+                0.0, 5.0, 10.0, 20.0, 25.0, 26.0, 26.13,
+                50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 95.0, 100.0
+            ]
+            frames_with_pts = []
+            for i, ts in enumerate(timestamps):
+                fpath = os.path.join(fixture_dir, f"frame_{i:02d}.jpg")
+                img = Image.new("RGB", (50, 50), (i * 10 % 255, 100, 100))
+                img.save(fpath)
+                frames_with_pts.append((ts, fpath))
+
+            cap = 8
+            duration = 100.0
+            selected = select_capped_frames(frames_with_pts, effective_max=cap, duration=duration)
+            self.assertEqual(len(selected), cap)
+            selected_pts = [round(ts, 2) for ts, _ in selected]
+            self.assertIn(0.0, selected_pts)
+            self.assertIn(100.0, selected_pts)
+            gaps = [selected_pts[i+1] - selected_pts[i] for i in range(len(selected_pts) - 1)]
+            max_allowed_gap = 2.0 * duration / cap
+            for gap in gaps:
+                self.assertLessEqual(gap, max_allowed_gap + 0.1, f"Gap {gap}s exceeds {max_allowed_gap}s in {selected_pts}")
+        finally:
+            shutil.rmtree(fixture_dir, ignore_errors=True)
+
+    def test_downloader_prefers_h264_avc1(self):
+        """Verify downloader format selector explicitly prioritizes H.264 (avc1) before AV1/fallback."""
+        import inspect
+        from agent_reels_viewer.downloader import download_media
+        src = inspect.getsource(download_media)
+        self.assertIn("vcodec^=avc1", src)
+
+    def test_doctor_av1_check(self):
+        """Verify doctor AV1 decoder inspection returns status tuple."""
+        from agent_reels_viewer.doctor import check_ffmpeg_av1_support
+        ok, desc = check_ffmpeg_av1_support()
+        self.assertIsInstance(ok, bool)
+        self.assertIsInstance(desc, str)
 
     def test_fresh_download_mtime_not_pruned_by_ttl(self):
         """Verify freshly downloaded file with current mtime is not pruned by auto_clean_old_sessions."""

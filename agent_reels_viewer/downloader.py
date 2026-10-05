@@ -172,7 +172,7 @@ def download_media(url: str, output_dir: str, cookies_path: Optional[str] = None
     out_template = os.path.join(output_dir, "video.%(ext)s")
 
     cmd = cmd_base + [
-        "--format", "bv*[height<=720][height>=480][ext=mp4]+ba[ext=m4a]/b[height<=720][height>=480]/bv*[height<=720]+ba/b[height<=720]/b",
+        "--format", "bv*[height<=720][height>=480][vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[height<=720][height>=480][vcodec^=avc1]/bv*[height<=720][vcodec^=avc1]+ba/b[height<=720][vcodec^=avc1]/bv*[height<=720][height>=480]+ba/b[height<=720][height>=480]/bv*[height<=720]+ba/b[height<=720]/b",
         "--merge-output-format", "mp4",
         "--output", out_template,
         "--no-playlist",

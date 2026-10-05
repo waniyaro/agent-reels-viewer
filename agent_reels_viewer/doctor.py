@@ -51,6 +51,24 @@ def check_python_package(pkg_name: str) -> Tuple[bool, str]:
         return False, f"Import error: {str(e)}"
 
 
+def check_ffmpeg_av1_support() -> Tuple[bool, str]:
+    """Check if system ffmpeg supports AV1 decoding (libdav1d, libaom-av1, or native av1)."""
+    ffmpeg = shutil.which("ffmpeg") or os.path.expanduser("~/.local/bin/ffmpeg")
+    try:
+        r = subprocess.run([ffmpeg, "-decoders"], capture_output=True, text=True, timeout=3)
+        dec = r.stdout.lower()
+        if "libdav1d" in dec:
+            return True, "libdav1d (fast)"
+        elif "libaom-av1" in dec or "libaom" in dec:
+            return True, "libaom (standard)"
+        elif "av1" in dec:
+            return True, "av1 (generic)"
+        else:
+            return False, "Not available (AV1 videos may fail to decode)"
+    except Exception as e:
+        return False, f"Could not query decoders ({e})"
+
+
 def run_doctor(download_model: bool = False, model_name: str = "base") -> Dict[str, Any]:
     """Perform health checks on all dependencies and print structured diagnostic."""
     print("=" * 60)
@@ -78,6 +96,11 @@ def run_doctor(download_model: bool = False, model_name: str = "base") -> Dict[s
         major, minor = get_ffmpeg_version()
         if (major, minor) < (5, 1):
             print(f"         [WARN] FFmpeg version {major}.{minor} is older than 5.1. Legacy '-vsync' mode will be used.")
+        av1_ok, av1_desc = check_ffmpeg_av1_support()
+        if av1_ok:
+            print(f"         [INFO] FFmpeg AV1 decoder: {av1_desc}")
+        else:
+            print(f"         [WARN] FFmpeg AV1 decoder: {av1_desc}. Install ffmpeg with libdav1d/libaom.")
     print(f"  [{'PASS' if ffprobe_ok else 'WARN'}] ffprobe: {ffprobe_info}")
     print(f"  [{'PASS' if ytdlp_ok else 'FAIL'}] yt-dlp:  {ytdlp_info}")
 
