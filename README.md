@@ -122,11 +122,43 @@ When an agent or user wants to examine a fine-grained 5-second slice (e.g. readi
 agent-reels-viewer frames "session_abc123" --from-sec 12.0 --to-sec 17.0 --count 6 --hires
 ```
 
-### Cleanup Cache
+### Cleanup Cache & Retention
 ```bash
+# Remove all cached sessions immediately
+agent-reels-viewer clean --days 0
+
 # Remove cached sessions older than 3 days
 agent-reels-viewer clean --days 3
 ```
+
+---
+
+## Where Data is Stored & Privacy Policy
+
+### Session Data Layout
+By default, inspected media sessions are stored locally in `~/.cache/agent-reels-viewer/session_<hash>/`:
+- `video.mp4`: Downloaded video stream (~5–20 MB). Retained to allow subsequent targeted second-pass zooming (`frames` command).
+- `frames/`: Extracted visual scene keyframes (768px JPEG).
+- `zoom_frames/`: High-resolution zoom frames extracted during second-pass inspections.
+- `timeline.md`: Chronological multimodal timeline artifact.
+- `meta.json`: Session metadata, speech status, and token estimations.
+*(Note: `audio.mp3` is deleted automatically in a `finally` block immediately after speech transcription completes or errors).*
+
+### Data Retention & Cleanup
+- **Automatic pruning on inspect**: Sessions older than the configured TTL are automatically cleaned during each `inspect` call. Age is calculated using the newest `mtime` among all files inside each session folder (not merely the folder directory timestamp).
+- **Configurable TTL**: You can customize retention by setting the `AGENT_REELS_TTL_HOURS` environment variable (default: `24` hours).
+- **Manual Cleanup**:
+  - `agent-reels-viewer clean --days 0` cleans all cached sessions immediately.
+  - `agent-reels-viewer clean --days N` cleans sessions older than N days.
+  *(Custom `--output` directories are never automatically cleaned).*
+
+### Disk Space Optimization (`--no-video`)
+- Passing `--no-video` deletes `video.mp4` immediately after initial keyframe extraction to conserve disk space.
+- *Notice*: `--no-video` permanently disables subsequent second-pass zooming on that session (`frames` will return `VIDEO_NOT_FOUND`).
+
+### Data Privacy & Host Model Transmission
+- All downloaded video files, extracted frames, audio tracks, and transcripts remain strictly local on your machine.
+- **Host LLM Transmission Disclosure**: When your host agent (Claude Code, Antigravity, OpenClaw, etc.) reads `timeline.md` or views image files in `frames/`, those text excerpts and visual images are transmitted to the host agent's AI model provider (such as Anthropic, Google, or OpenAI) as part of your conversation context.
 
 ---
 

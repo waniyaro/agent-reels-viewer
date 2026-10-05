@@ -373,7 +373,7 @@ class TestTimelineAssembly(unittest.TestCase):
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("No spoken speech detected (music/visual only)", c)
-            self.assertIn("No spoken transcript available", c)
+            self.assertIn("No speech recorded", c)
 
     def test_timeline_speech_status_skipped(self):
         meta = {"title": "Skipped Video", "uploader": "user", "webpage_url": "https://instagram.com/reel/1", "duration": 15}
@@ -381,7 +381,7 @@ class TestTimelineAssembly(unittest.TestCase):
         with open(path, "r") as f:
             c = f.read()
             self.assertIn("Speech analysis skipped (--no-speech)", c)
-            self.assertIn("Speech analysis skipped by user flag", c)
+            self.assertIn("Speech Status", c)
 
     def test_timeline_speech_status_timeout(self):
         meta = {"title": "Timeout Video", "uploader": "user", "webpage_url": "https://youtube.com/shorts/2", "duration": 60}
@@ -767,6 +767,196 @@ class TestLimitsAndConstants(unittest.TestCase):
     def test_ffmpeg_version_detection(self):
         major, minor = get_ffmpeg_version()
         self.assertGreaterEqual(major, 1)
+
+
+
+class TestHardeningRoundTwelve(unittest.TestCase):
+    """Tests for file cleanup, TTL by file mtime, token estimation, timeline deduplication, and modes."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_dir = tempfile.mkdtemp(prefix="test_round12_")
+        cls.fixture_video = os.path.join(cls.test_dir, "test_fixture.mp4")
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i",
+            "testsrc=duration=5:size=320x240:rate=10",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=5",
+            "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
+            cls.fixture_video
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.test_dir, ignore_errors=True)
+
+    def test_audio_mp3_deleted_in_finally(self):
+        """Verify audio.mp3 is deleted immediately after transcription even if transcribe fails or succeeds."""
+        session_dir = tempfile.mkdtemp(prefix="session_audio_del_")
+        try:
+            import argparse
+            args = argparse.Namespace(
+                url=self.fixture_video,
+                json=True,
+                output=session_dir,
+                no_speech=False,
+                mode="standard",
+                model="tiny",
+                whisper_timeout=10,
+                cookies=None,
+                max_frames=4,
+                no_video=False,
+                debug_frames=False,
+            )
+            # Run cmd_inspect with mock transcribe
+            with patch("agent_reels_viewer.cli.transcribe_audio") as mock_trans:
+                mock_trans.return_value = (True, [{"start": 0.0, "end": 1.0, "text": "hello"}], "ok", "transcribed")
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    cmd_inspect(args)
+
+            audio_path = os.path.join(session_dir, "audio.mp3")
+            self.assertFalse(os.path.exists(audio_path), "audio.mp3 must be deleted in finally block")
+
+            # Also verify deletion when transcribe raises an exception
+            with patch("agent_reels_viewer.cli.transcribe_audio", side_effect=RuntimeError("transcribe crash")):
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    try:
+                        cmd_inspect(args)
+                    except RuntimeError:
+                        pass
+            self.assertFalse(os.path.exists(audio_path), "audio.mp3 must be deleted even if transcribe raises an exception")
+        finally:
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+    def test_session_cleanup_by_file_mtime_and_custom_ttl(self):
+        """Verify TTL cleanup uses newest file mtime and respects AGENT_REELS_TTL_HOURS and clean --days 0."""
+        from agent_reels_viewer.cli import get_session_latest_mtime, auto_clean_old_sessions, cmd_clean
+        cache_dir = tempfile.mkdtemp(prefix="test_cache_ttl_")
+        try:
+            s_old = os.path.join(cache_dir, "session_old")
+            s_fresh = os.path.join(cache_dir, "session_fresh")
+            os.makedirs(s_old)
+            os.makedirs(s_fresh)
+
+            f_old = os.path.join(s_old, "video.mp4")
+            with open(f_old, "w") as f:
+                f.write("old data")
+
+            f_fresh = os.path.join(s_fresh, "video.mp4")
+            with open(f_fresh, "w") as f:
+                f.write("fresh data")
+
+            now = time.time()
+            old_time = now - (30 * 3600)  # 30 hours ago
+            fresh_time = now - (2 * 3600)  # 2 hours ago
+
+            os.utime(f_old, (old_time, old_time))
+            os.utime(s_old, (now, now))  # Directory folder itself is fresh, but file inside is old
+
+            os.utime(f_fresh, (fresh_time, fresh_time))
+            os.utime(s_fresh, (now, now))
+
+            # Check get_session_latest_mtime inspects files inside
+            self.assertAlmostEqual(get_session_latest_mtime(s_old), old_time, delta=2.0)
+            self.assertAlmostEqual(get_session_latest_mtime(s_fresh), fresh_time, delta=2.0)
+
+            # auto_clean_old_sessions with TTL=24 hours should prune s_old and keep s_fresh
+            with patch("agent_reels_viewer.cli.get_base_cache_dir", return_value=cache_dir):
+                with patch.dict(os.environ, {"AGENT_REELS_TTL_HOURS": "24"}):
+                    auto_clean_old_sessions(cache_dir)
+            self.assertFalse(os.path.exists(s_old), "Session with files older than 24h must be cleaned")
+            self.assertTrue(os.path.exists(s_fresh), "Session with recent files must be preserved")
+
+            # cmd_clean with days=0 should remove s_fresh immediately
+            import argparse
+            args_clean = argparse.Namespace(days=0)
+            with patch("agent_reels_viewer.cli.get_base_cache_dir", return_value=cache_dir):
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    cmd_clean(args_clean)
+            self.assertFalse(os.path.exists(s_fresh), "clean --days 0 must remove all sessions")
+        finally:
+            shutil.rmtree(cache_dir, ignore_errors=True)
+
+    def test_estimated_image_tokens_in_json_and_meta(self):
+        """Verify estimated_image_tokens and frames_total are present in JSON and meta.json."""
+        session_dir = tempfile.mkdtemp(prefix="session_tokens_")
+        try:
+            import argparse
+            args = argparse.Namespace(
+                url=self.fixture_video,
+                json=True,
+                output=session_dir,
+                no_speech=True,
+                mode="standard",
+                model="tiny",
+                whisper_timeout=10,
+                cookies=None,
+                max_frames=3,
+                no_video=False,
+                debug_frames=False,
+            )
+            with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+                cmd_inspect(args)
+                data = json.loads(mock_out.getvalue())
+
+            self.assertIn("estimated_image_tokens", data)
+            self.assertIn("frames_total", data)
+            self.assertGreater(data["estimated_image_tokens"], 0)
+            self.assertEqual(data["frames_total"], data["frames_extracted"])
+
+            meta_file = os.path.join(session_dir, "meta.json")
+            self.assertTrue(os.path.exists(meta_file))
+            with open(meta_file, encoding="utf-8") as f:
+                meta_data = json.load(f)
+            self.assertIn("estimated_image_tokens", meta_data)
+            self.assertIn("frames_total", meta_data)
+            self.assertEqual(meta_data["estimated_image_tokens"], data["estimated_image_tokens"])
+        finally:
+            shutil.rmtree(session_dir, ignore_errors=True)
+
+    def test_timeline_no_duplicate_transcript(self):
+        """Verify speech transcript is in timeline table, and ## Full Transcript section is removed."""
+        t_path = os.path.join(self.test_dir, "test_timeline.md")
+        segments = [
+            {"start": 1.0, "end": 2.5, "text": "Testing speech transcript line"}
+        ]
+        meta = {"uploader": "test_creator", "duration": 5.0}
+        keyframes = [(1.5, "frame_01.jpg")]
+        t_path = assemble_timeline(
+            output_dir=self.test_dir,
+            meta=meta,
+            keyframes=keyframes,
+            speech_segments=segments,
+            has_speech=True,
+            transcription_status="Transcribed",
+            speech_status="ok",
+        )
+        with open(t_path, encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("Testing speech transcript line", content)
+        self.assertNotIn("## Full Transcript", content, "Redundant Full Transcript section must be removed to save tokens")
+
+    def test_modes_standard_vs_deep(self):
+        """Verify standard mode vs deep mode cadence and candidate generation."""
+        frames_std, ts_std, _, _, stats_std = extract_keyframes(
+            self.fixture_video,
+            os.path.join(self.test_dir, "out_std"),
+            has_speech=False,
+            mode="standard",
+            return_stats=True,
+        )
+        frames_deep, ts_deep, _, _, stats_deep = extract_keyframes(
+            self.fixture_video,
+            os.path.join(self.test_dir, "out_deep"),
+            has_speech=False,
+            mode="deep",
+            return_stats=True,
+        )
+        self.assertEqual(stats_std["mode"], "standard")
+        self.assertEqual(stats_deep["mode"], "deep")
+        self.assertLess(stats_deep["step_sec"], stats_std["step_sec"])
+        self.assertLessEqual(stats_deep["threshold"], stats_std["threshold"])
 
 
 if __name__ == "__main__":

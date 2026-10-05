@@ -50,22 +50,28 @@ python3 scripts/viewer.py inspect "<URL_OR_FILE>" --json
 
 ### Key Options & Flags:
 - `<URL_OR_FILE>`: Supported social media URL (Instagram, TikTok, YouTube Shorts) OR direct filesystem path to a local video (e.g. `./clip.mp4`).
+- `--mode {standard,deep,quick}`: Inspection sampling mode:
+  - `standard` (default): Balanced adaptive sampling (12 frames for speech, up to 20 for visual).
+  - `deep`: Finer sampling rate and lower deduplication threshold (up to 20 frames for speech, 30 for visual), ideal for dense code/UI screencasts.
+  - `quick`: Fast metadata-only pass without downloading video.
+- `--max-frames <COUNT>`: Override ceiling cap on keyframes. For talking-head clips with speech, recommend `--max-frames 6` to preserve host LLM token context.
 - `--model {tiny,base,small}`: Whisper speech model size (default: `base`, recommended minimum for production dialogue; `tiny` is primarily for fast smoke-testing on CPU).
 - `--no-speech`: Skip audio transcription pass entirely and prioritize dense visual keyframes.
 - `--whisper-timeout <SEC>`: Override speech transcription timeout limit in seconds.
-- `--mode quick`: Fetches metadata only without downloading video stream.
 - `--cookies /path/to/cookies.txt`: Authenticated extraction for login-gated content.
 
 ---
 
-## 2. Recommended Multimodal Workflow
+## 2. Recommended Multimodal Workflow (Token-Optimized)
 
 When a user provides a video link or file:
-1. **Run inspection**: Execute `agent-reels-viewer inspect "<URL_OR_FILE>" --json`.
-2. **Read timeline artifact**: Open and read the file specified in `timeline_path` using your file viewing/reading tool to examine metadata, speech status, audio dialogue, and the chronological scene summary.
-3. **Open keyframes**: Inspect extracted keyframes from the `frames/` folder (view all if count <= 12) using your image viewer tool to examine visual contents, code editor text, memes, diagrams, or on-screen captions.
-4. **Targeted zoom (if needed)**: If critical text, small code symbols, or rapid UI movements are unclear, run `agent-reels-viewer frames "<SESSION_ID>" --from-sec <X> --to-sec <Y> --count 6 --hires --json` and inspect the high-resolution zoom frames.
-5. **Formulate response**: Answer the user's inquiry directly, clearly distinguishing direct visual and audio observations from inferences.
+1. **Run inspection**: Execute `agent-reels-viewer inspect "<URL_OR_FILE>" --json`. For talking-head videos with dominant speech, pass `--max-frames 6` to conserve host context tokens.
+2. **First read timeline artifact (`timeline.md`)**: Read the file specified in `timeline_path`. Check the spoken dialogue in the Chronological Timeline table. Frequently, the dialogue table fully answers the inquiry without needing to load all images into model context.
+3. **Selective frame inspection**: Open only the keyframes relevant to the question:
+   - For speech-heavy clips: open at most 4–6 keyframes where visual scene shifts or diagrams occur.
+   - For silent clips, memes, UI screencasts, or videos with `has_speech: false`: open all extracted keyframes.
+4. **Targeted second-pass zoom (hires on demand only)**: If and only if critical code, small terminal text, or fine diagrams require closer inspection, invoke `agent-reels-viewer frames "<SESSION_ID>" --from-sec <X> --to-sec <Y> --count 6 --hires --json`.
+5. **Formulate response**: Synthesize findings, clearly separating direct visual and audio observations from inferences.
 
 ---
 
@@ -83,6 +89,8 @@ The command outputs compact JSON:
   "speech_status": "ok",
   "timestamps": "exact",
   "frames_extracted": 12,
+  "frames_total": 12,
+  "estimated_image_tokens": 5304,
   "output_dir": "/path/to/cache/session_abc123",
   "timeline_path": "/path/to/cache/session_abc123/timeline.md",
   "video_path": "/path/to/cache/session_abc123/video.mp4"

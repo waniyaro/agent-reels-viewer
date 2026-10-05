@@ -184,7 +184,9 @@ def calculate_frame_difference(
 def deduplicate_frames(
     frames: List[Tuple[float, str]],
     is_dense_mode: bool = False,
-) -> List[Tuple[float, str]]:
+    threshold: Optional[float] = None,
+    return_stats: bool = False,
+):
     """Filter out near-duplicate consecutive frames using tiled block difference (256px width preserving aspect ratio, 16x16 grid, max fraction of differing pixels > 16 across tiles).
 
     In dense visual mode (speech_status none/skipped/error):
@@ -196,30 +198,54 @@ def deduplicate_frames(
       while retaining subtitle changes (>= 0.180) and gesture/scene shifts.
     """
     if not frames or not PIL_AVAILABLE or len(frames) <= 1:
-        return frames
+        return (frames, []) if return_stats else frames
 
-    threshold = 0.012 if is_dense_mode else 0.080
+    if threshold is None:
+        threshold = 0.012 if is_dense_mode else 0.080
+
     kept = [frames[0]]
     prev_sig = compute_frame_signature(frames[0][1])
+    diff_records = []
 
     for pts, fpath in frames[1:]:
         curr_sig = compute_frame_signature(fpath)
         if prev_sig is None or curr_sig is None:
             kept.append((pts, fpath))
             prev_sig = curr_sig
+            diff_records.append({
+                "from_sec": kept[-2][0],
+                "to_sec": pts,
+                "diff": 1.0,
+                "threshold": threshold,
+                "decision": "kept",
+            })
             continue
 
         diff = calculate_frame_difference(prev_sig, curr_sig)
         if diff >= threshold:
+            diff_records.append({
+                "from_sec": kept[-1][0],
+                "to_sec": pts,
+                "diff": round(diff, 4),
+                "threshold": threshold,
+                "decision": "kept",
+            })
             kept.append((pts, fpath))
             prev_sig = curr_sig
         else:
+            diff_records.append({
+                "from_sec": kept[-1][0],
+                "to_sec": pts,
+                "diff": round(diff, 4),
+                "threshold": threshold,
+                "decision": "dropped",
+            })
             try:
                 os.remove(fpath)
             except OSError:
                 pass
 
-    return kept
+    return (kept, diff_records) if return_stats else kept
 
 
 def sanitize_stderr(stderr_text: str) -> str:
@@ -234,7 +260,9 @@ def extract_keyframes(
     output_dir: str,
     max_frames: Optional[int] = None,
     has_speech: bool = True,
-) -> Tuple[List[Tuple[float, str]], str, str, str]:
+    mode: str = "standard",
+    return_stats: bool = False,
+):
     """Extract scene keyframes using hybrid scene detection + adaptive cadence floor.
     
     Returns: (keyframes_list, timestamp_type, error_code, error_message)
@@ -262,12 +290,15 @@ def extract_keyframes(
     if duration <= 0:
         duration = 30.0
 
+    is_deep = (mode == "deep")
     if not has_speech:
-        step = 1.5
-        default_cap = 20
+        step = 1.0 if is_deep else 1.5
+        default_cap = 30 if is_deep else 20
+        dedup_threshold = 0.008 if is_deep else 0.012
     else:
-        step = max(3.0, duration / 12.0)
-        default_cap = 12
+        step = max(2.0, duration / 20.0) if is_deep else max(3.0, duration / 12.0)
+        default_cap = 20 if is_deep else 12
+        dedup_threshold = 0.050 if is_deep else 0.080
 
     if max_frames is not None:
         effective_max = max(1, max_frames)
@@ -329,7 +360,12 @@ def extract_keyframes(
     timestamp_type = "exact" if all_pts_exact else "approximate"
 
     # Deduplicate near-identical frames using downscaled pixel difference
-    filtered = deduplicate_frames(frames_with_pts, is_dense_mode=(not has_speech))
+    filtered, pairwise_diffs = deduplicate_frames(
+        frames_with_pts,
+        is_dense_mode=(not has_speech),
+        threshold=dedup_threshold,
+        return_stats=True,
+    )
 
     # Cap to effective_max if needed
     if len(filtered) > effective_max:
@@ -362,6 +398,19 @@ def extract_keyframes(
             os.rename(fpath, final_name)
         final_results.append((pts_rounded, final_name))
 
+    stats = {
+        "raw_candidates": len(frames_with_pts),
+        "after_dedup": len(filtered),
+        "ceiling_cap": effective_max,
+        "final_frames": len(final_results),
+        "mode": mode,
+        "has_speech": has_speech,
+        "step_sec": round(step, 2),
+        "threshold": dedup_threshold,
+        "pairwise_diffs": pairwise_diffs,
+    }
+    if return_stats:
+        return final_results, timestamp_type, "", "", stats
     return final_results, timestamp_type, "", ""
 
 
