@@ -187,7 +187,7 @@ ln -s "$(pwd)" ~/.claude/skills/agent-reels-viewer
 | **TikTok Videos** | **Partially Verified (1 clip tested)** | Tested locally on 1 TikTok clip (`7106594312292453675`, 24s). Music-only track correctly detected by VAD (`has_speech: false`). |
 | **Instagram Reels** | **Unverified with Cookies** | Missing cookies error handling is verified (`NEEDS_COOKIES`); extraction with real user cookies has not been verified. |
 | **Second-Pass Zoom (`frames`)** | **Verified** | Tested locally on both downloaded video sessions and local file sessions (`--from-sec` / `--to-sec`). |
-| **Linux, macOS & Windows (Py 3.10–3.13)** | **CI зелёный (все 12 конфигураций)** | CI полностью зелёный (2026-10-05): все 12 матричных конфигураций на Ubuntu, macOS и Windows (Python 3.10, 3.11, 3.12, 3.13) успешно прошли unit-тесты: [Run 37277567454](https://github.com/waniyaro/agent-reels-viewer/actions/runs/37277567454). Кросс-дисковая ошибка Windows (`ntpath.relpath` на разных маунтах D: и C:) полностью устранена. |
+| **CI: Linux, macOS & Windows (Py 3.10–3.13)** | **CI unit-тесты зелёные** | Unit-тесты и шаг doctor успешно пройдены на всех 12 матричных конфигурациях (Ubuntu, macOS, Windows на Python 3.10, 3.11, 3.12, 3.13) для коммита a8f9873: [Run 37277567454](https://github.com/waniyaro/agent-reels-viewer/actions/runs/37277567454). Реальные загрузки и Whisper на настоящем аудио в CI не покрыты; шаг live-canary в CI не запускался (пропущен). |
 
 > **Note on CI Live Canary**: Social platforms like YouTube and Instagram aggressively challenge data center IPs (such as GitHub Actions runners). In CI, the `live-canary` job is configured with `continue-on-error: true` so data center IP blocks do not fail build validation.
 
