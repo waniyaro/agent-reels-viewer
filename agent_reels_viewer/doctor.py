@@ -18,6 +18,10 @@ def check_binary(name: str) -> Tuple[bool, str]:
             f"/opt/homebrew/bin/{name}",
             f"/usr/local/bin/{name}",
             f"/usr/bin/{name}",
+            f"C:\\ProgramData\\chocolatey\\bin\\{name}.exe",
+            f"C:\\ProgramData\\chocolatey\\lib\\ffmpeg\\tools\\ffmpeg\\bin\\{name}.exe",
+            f"C:\\ffmpeg\\bin\\{name}.exe",
+            f"C:\\Program Files\\ffmpeg\\bin\\{name}.exe",
         ]
         for c in candidates:
             if os.path.exists(c):

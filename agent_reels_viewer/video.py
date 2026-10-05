@@ -19,12 +19,17 @@ def get_ffmpeg_path() -> Optional[str]:
     """Find ffmpeg binary."""
     path = shutil.which("ffmpeg")
     if not path:
-        for c in [
+        candidates = [
             os.path.expanduser("~/.local/bin/ffmpeg"),
             "/opt/homebrew/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
             "/usr/bin/ffmpeg",
-        ]:
+            "C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe",
+            "C:\\ProgramData\\chocolatey\\lib\\ffmpeg\\tools\\ffmpeg\\bin\\ffmpeg.exe",
+            "C:\\ffmpeg\\bin\\ffmpeg.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe",
+        ]
+        for c in candidates:
             if os.path.exists(c):
                 path = c
                 break
@@ -35,12 +40,17 @@ def get_ffprobe_path() -> Optional[str]:
     """Find ffprobe binary."""
     path = shutil.which("ffprobe")
     if not path:
-        for c in [
+        candidates = [
             os.path.expanduser("~/.local/bin/ffprobe"),
             "/opt/homebrew/bin/ffprobe",
             "/usr/local/bin/ffprobe",
             "/usr/bin/ffprobe",
-        ]:
+            "C:\\ProgramData\\chocolatey\\bin\\ffprobe.exe",
+            "C:\\ProgramData\\chocolatey\\lib\\ffmpeg\\tools\\ffmpeg\\bin\\ffprobe.exe",
+            "C:\\ffmpeg\\bin\\ffprobe.exe",
+            "C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe",
+        ]
+        for c in candidates:
             if os.path.exists(c):
                 path = c
                 break
