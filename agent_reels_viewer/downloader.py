@@ -172,11 +172,12 @@ def download_media(url: str, output_dir: str, cookies_path: Optional[str] = None
     out_template = os.path.join(output_dir, "video.%(ext)s")
 
     cmd = cmd_base + [
-        "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "--format", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[height<=720]/b",
         "--merge-output-format", "mp4",
         "--output", out_template,
         "--no-playlist",
         "--no-continue",
+        "--no-mtime",
     ]
 
     if cookies_path and os.path.exists(cookies_path):

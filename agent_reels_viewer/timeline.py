@@ -113,6 +113,16 @@ def assemble_timeline(
         lines.extend(rows)
 
     lines.append("")
+    if speech_status == "none":
+        lines.append("*(No spoken transcript available — please analyze visual frames for on-screen text, meme hooks, and actions)*")
+    elif speech_status == "skipped":
+        lines.append("*(Speech analysis skipped by user flag --no-speech — please analyze visual frames for on-screen text and actions)*")
+    elif speech_status == "timeout":
+        lines.append("*(Speech analysis timed out — audio processing exceeded time limit. Visual frames are preserved above)*")
+    elif speech_status == "error":
+        lines.append(f"*(Speech analysis unavailable: {transcription_status or 'error'}. Install faster-whisper: pip install '.[speech]')*")
+
+    lines.append("")
     content = "\n".join(lines)
     with open(timeline_path, "w", encoding="utf-8") as f:
         f.write(content)

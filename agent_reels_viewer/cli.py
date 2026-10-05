@@ -355,8 +355,9 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         print(f"\n[DEBUG_FRAMES] Video: {video_path}", file=sys.stderr)
         print(f"[DEBUG_FRAMES] Mode: {args.mode} | has_speech: {not use_dense_cadence}", file=sys.stderr)
         print(f"[DEBUG_FRAMES] Raw candidates: {kf_stats.get('raw_candidates')}", file=sys.stderr)
-        print(f"[DEBUG_FRAMES] After dedup: {kf_stats.get('after_dedup')}", file=sys.stderr)
-        print(f"[DEBUG_FRAMES] Ceiling cap: {kf_stats.get('ceiling_cap')}", file=sys.stderr)
+        print(f"[DEBUG_FRAMES] Kept after dedup: {kf_stats.get('kept_after_dedup')}", file=sys.stderr)
+        print(f"[DEBUG_FRAMES] Dropped by dedup: {kf_stats.get('dropped_by_dedup')}", file=sys.stderr)
+        print(f"[DEBUG_FRAMES] Dropped by cap: {kf_stats.get('dropped_by_cap')}", file=sys.stderr)
         print(f"[DEBUG_FRAMES] Final frames: {kf_stats.get('final_frames')}", file=sys.stderr)
         print(f"[DEBUG_FRAMES] Estimated image tokens: {estimated_image_tokens}", file=sys.stderr)
         for pair in kf_stats.get("pairwise_diffs", []):

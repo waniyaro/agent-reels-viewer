@@ -93,8 +93,8 @@ def transcribe_audio(
             return None, [], "error", err_msg
         worker_script = os.path.join(os.path.dirname(__file__), "transcribe_worker.py")
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_out:
-        tmp_json = tmp_out.name
+    tmp_fd, tmp_json = tempfile.mkstemp(suffix=".json")
+    os.close(tmp_fd)
 
     cmd = [
         sys.executable,

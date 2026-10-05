@@ -367,14 +367,32 @@ def extract_keyframes(
         return_stats=True,
     )
 
-    # Cap to effective_max if needed
-    if len(filtered) > effective_max:
-        if effective_max == 1:
-            indices = [0]
-        else:
-            indices = [int(round(i * (len(filtered) - 1) / (effective_max - 1))) for i in range(effective_max)]
+    raw_candidates_count = len(frames_with_pts)
+    kept_after_dedup = len(filtered)
+    dropped_by_dedup = raw_candidates_count - kept_after_dedup
+    dropped_by_cap = 0
 
-        to_keep_indices = set(indices)
+    # Cap to effective_max if needed, choosing frames with highest visual transition diff
+    if len(filtered) > effective_max:
+        dropped_by_cap = len(filtered) - effective_max
+        if effective_max == 1:
+            to_keep_indices = {0}
+        elif effective_max == 2:
+            to_keep_indices = {0, len(filtered) - 1}
+        else:
+            # Score interior candidates by difference from previous frame
+            interior_scores = []
+            for i in range(1, len(filtered) - 1):
+                prev_sig = compute_frame_signature(filtered[i - 1][1])
+                curr_sig = compute_frame_signature(filtered[i][1])
+                diff_val = calculate_frame_difference(prev_sig, curr_sig) if (prev_sig and curr_sig) else 1.0
+                interior_scores.append((diff_val, i))
+
+            # Pick top (effective_max - 2) interior candidates with highest difference
+            interior_scores.sort(key=lambda x: (-x[0], x[1]))
+            selected_interior = [idx for _, idx in interior_scores[:(effective_max - 2)]]
+            to_keep_indices = {0, len(filtered) - 1}.union(selected_interior)
+
         selected_frames = []
         for i, item in enumerate(filtered):
             if i in to_keep_indices:
@@ -399,9 +417,10 @@ def extract_keyframes(
         final_results.append((pts_rounded, final_name))
 
     stats = {
-        "raw_candidates": len(frames_with_pts),
-        "after_dedup": len(filtered),
-        "ceiling_cap": effective_max,
+        "raw_candidates": raw_candidates_count,
+        "kept_after_dedup": kept_after_dedup,
+        "dropped_by_dedup": dropped_by_dedup,
+        "dropped_by_cap": dropped_by_cap,
         "final_frames": len(final_results),
         "mode": mode,
         "has_speech": has_speech,
