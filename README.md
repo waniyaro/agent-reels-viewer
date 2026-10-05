@@ -31,18 +31,21 @@ flowchart TD
     B -->|Local File| C["Local Media Processor"]
     B -->|Social URL| D["Downloader (yt-dlp)"]
     D -->|Metadata| M["meta.json (Creator, Music, Views)"]
-    D -->|Optimized Video (480p-720p)| C
+    D -->|"Optimized Video (480p-720p)"| C
     
     C -->|Audio Track| E["Audio Engine (FFmpeg)"]
-    E -->|VAD-Filtered STT| F["Speech Transcript (faster-whisper)"]
+    E -->|"VAD-Filtered STT"| F["Speech Transcript (faster-whisper)"]
     
     C -->|Visual Track| G["Vision Engine (FFmpeg)"]
-    G -->|Scene Detection & showinfo PTS| H["Keyframes (768px JPEG, 8-20 frames)"]
+    G -->|"Scene Detection & showinfo PTS"| H["Keyframes (768px JPEG, 8-20 frames)"]
     
-    F & H & M --> I["Timeline Builder"]
+    F --> I["Timeline Builder"]
+    H --> I
+    M --> I
     I --> J["Artifact: timeline.md"]
     
-    J & H --> K["AI Agent (Vision LLM)"]
+    J --> K["AI Agent (Vision LLM)"]
+    H --> K
     K --> L["Structured Answer to User"]
 ```
 
