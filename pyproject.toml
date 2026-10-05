@@ -41,6 +41,11 @@ all = [
 [project.scripts]
 agent-reels-viewer = "agent_reels_viewer.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/waniyaro/agent-reels-viewer"
+Repository = "https://github.com/waniyaro/agent-reels-viewer"
+Issues = "https://github.com/waniyaro/agent-reels-viewer/issues"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["agent_reels_viewer*"]

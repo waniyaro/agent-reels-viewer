@@ -1,6 +1,9 @@
 # /agent-reels-viewer
 
 <p align="center">
+  <a href="https://pypi.org/project/agent-reels-viewer/">
+    <img src="https://img.shields.io/pypi/v/agent-reels-viewer.svg?style=for-the-badge&logo=pypi&color=blue" alt="PyPI version" />
+  </a>
   <a href="https://github.com/waniyaro/agent-reels-viewer">
     <img src="https://img.shields.io/badge/Agent%20Ready-Claude%20Code%20%7C%20Antigravity%20%7C%20OpenClaw%20%7C%20Codex-orange.svg?style=for-the-badge" alt="Agent Ready" />
   </a>
@@ -33,9 +36,9 @@ npx skills add waniyaro/agent-reels-viewer -g
 ```
 *(`-g` installs globally across all agent sessions. Omit `-g` to install into the current project only).*
 
-**Or install directly into your Python environment:**
+**Or install directly from PyPI into your Python environment:**
 ```bash
-pip install -e ".[speech]"
+pip install "agent-reels-viewer[speech]"
 ```
 
 **Zero external API keys. Zero monthly subscriptions.** Run `agent-reels-viewer doctor` once to verify local FFmpeg and Whisper dependencies.
