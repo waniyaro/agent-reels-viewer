@@ -49,7 +49,7 @@ flowchart TD
 ### Key Architectural Decisions:
 1. **The skill produces artifacts, not LLM calls**: The CLI generates clean local files (`timeline.md`, `frames/`, `meta.json`). The hosting agent uses its own built-in vision and file-reading tools to inspect them. **No extra API keys or monthly subscriptions required.**
 2. **Real PTS Presentation Timestamps**: Frame timestamps are extracted directly from FFmpeg `showinfo` output (`pts_time`), accurately matching speech timestamps and visual scene transitions.
-3. **Pixel-Difference Keyframe Deduplication**: Compares downscaled 128px grayscale frame signatures to eliminate duplicate frames while retaining fine on-screen text typing and subtle UI edits.
+3. **Tiled Block Keyframe Deduplication**: Downscales frames to 256px width (preserving aspect ratio) divided into a 16x16 tile grid. Evaluates the maximum fraction of differing pixels (intensity difference > 16) across tiles (max tile difference). Eliminates static duplicates and codec noise while reliably capturing subtle UI edits and single-character typing.
 4. **Isolated Process Transcription with Hard Timeout**: Transcription executes in an isolated worker process with hard OS timeouts (`max(30, 3*duration)`), preventing Python thread hangs. Model weights are cached outside the timeout window.
 5. **Adaptive Frame Density**: Silent/music-only clips receive more frequent keyframes (1.5s step, cap 20) to capture on-screen text and fast scene cuts. Talking-head clips use conversational cadence (3.5s step, cap 12).
 

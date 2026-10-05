@@ -330,7 +330,8 @@ def cmd_frames(args: argparse.Namespace) -> int:
 
     if os.path.isfile(target):
         video_path = os.path.abspath(target)
-        output_dir = args.output if args.output else os.path.dirname(video_path)
+        output_dir = args.output if args.output else get_session_dir(video_path)
+        os.makedirs(output_dir, exist_ok=True)
     elif os.path.isdir(target):
         output_dir = os.path.abspath(target)
         for f in os.listdir(output_dir):

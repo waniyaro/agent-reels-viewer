@@ -130,7 +130,7 @@ def compute_frame_signature(
     target_width: int = 256,
     grid: Tuple[int, int] = (16, 16),
 ) -> Optional[Tuple[List[bytes], Tuple[int, int]]]:
-    """Load image as downscaled grayscale 256px signature divided into a grid of tiles."""
+    """Load image as downscaled grayscale signature (target_width=256 preserving aspect ratio) divided into a 16x16 grid of tiles."""
     if not PIL_AVAILABLE:
         return None
     try:
@@ -163,8 +163,8 @@ def calculate_frame_difference(
     sig2: Tuple[List[bytes], Tuple[int, int]],
     pixel_threshold: int = 16,
 ) -> float:
-    """Calculate the maximum fraction of differing pixels across any tile (max tile diff).
-    Returns float in range [0.0, 1.0]."""
+    """Calculate the maximum fraction of differing pixels across any tile (max tile difference).
+    A pixel differs if abs(p1 - p2) > pixel_threshold (default 16). Returns float in range [0.0, 1.0]."""
     tiles1, size1 = sig1
     tiles2, size2 = sig2
     if size1 != size2 or len(tiles1) != len(tiles2) or len(tiles1) == 0:
@@ -185,7 +185,7 @@ def deduplicate_frames(
     frames: List[Tuple[float, str]],
     is_dense_mode: bool = False,
 ) -> List[Tuple[float, str]]:
-    """Filter out near-duplicate consecutive frames using tiled block difference.
+    """Filter out near-duplicate consecutive frames using tiled block difference (256px width preserving aspect ratio, 16x16 grid, max fraction of differing pixels > 16 across tiles).
 
     In dense visual mode (speech_status none/skipped/error):
       Threshold is 0.012 (1.2% max tile difference). This drops identical duplicates
@@ -383,7 +383,7 @@ def extract_range_frames(
         return []
 
     duration = max(0.1, end_sec - start_sec)
-    fps_val = max(1, count) / duration
+    step = duration / max(1, count)
 
     range_slug = f"{start_sec:.1f}-{end_sec:.1f}_c{count}_{'hires' if hires else 'std'}"
     range_dir = os.path.join(output_dir, "zoom_frames", range_slug)
@@ -397,6 +397,9 @@ def extract_range_frames(
             pass
 
     scale_filter = "scale=1080:-2" if hires else "scale='if(gt(iw,ih),min(768,iw),-2)':'if(gt(iw,ih),-2,min(768,ih))'"
+    major, minor = get_ffmpeg_version()
+    vfr_args = ["-fps_mode", "vfr"] if (major, minor) >= (5, 1) else ["-vsync", "vfr"]
+    filter_expr = f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{step:.3f})',{scale_filter},showinfo"
 
     cmd = [
         ffmpeg,
@@ -404,7 +407,8 @@ def extract_range_frames(
         "-ss", str(start_sec),
         "-t", str(duration),
         "-i", video_path,
-        "-vf", f"fps={fps_val:.3f},{scale_filter},showinfo",
+        "-vf", filter_expr,
+    ] + vfr_args + [
         "-q:v", "2" if hires else "4",
         pattern,
     ]
@@ -422,6 +426,13 @@ def extract_range_frames(
                 pts_map[int(m.group(1))] = float(m.group(2))
 
     raw = sorted(glob.glob(os.path.join(range_dir, "raw_zoom_*.jpg")))
+    if len(raw) > count:
+        for extra in raw[count:]:
+            try:
+                os.remove(extra)
+            except OSError:
+                pass
+        raw = raw[:count]
     results = []
     for idx, p in enumerate(raw):
         if idx in pts_map:

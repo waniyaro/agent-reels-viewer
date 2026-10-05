@@ -69,6 +69,14 @@ class TestCiCheck(unittest.TestCase):
         self.assertIsNotNone(data)
         self.assertEqual(data.get("status"), "success")
 
+    def test_parse_json_empty_output(self):
+        self.assertIsNone(parse_json_from_output(""))
+        self.assertIsNone(parse_json_from_output("   \n\t  "))
+
+    def test_parse_json_invalid_json(self):
+        self.assertIsNone(parse_json_from_output("this is completely invalid text with no json"))
+        self.assertIsNone(parse_json_from_output("{unclosed json"))
+
 
 if __name__ == "__main__":
     unittest.main()
