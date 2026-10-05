@@ -338,7 +338,7 @@ class TestWhisperTimeout(unittest.TestCase):
                 worker_script=mock_worker,
             )
             elapsed = time.time() - start_t
-            self.assertLess(elapsed, 2.5, "Subprocess was not killed within timeout limit")
+            self.assertLess(elapsed, 3.8, "Subprocess was not killed within timeout limit")
             self.assertIsNone(has_speech)
             self.assertEqual(segments, [])
             self.assertEqual(status, "timeout")

@@ -56,8 +56,9 @@ jobs:
         agent-reels-viewer doctor
 
     - name: Run Unit Tests
+      shell: bash
       run: |
-        python -m unittest discover tests
+        python -m unittest discover -v tests
 
   live-canary:
     name: Live Canary Extraction Check
