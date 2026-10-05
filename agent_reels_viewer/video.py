@@ -168,19 +168,24 @@ def compute_frame_signature(
         return None
 
 
-def calculate_frame_difference(
+def calculate_frame_metrics(
     sig1: Tuple[List[bytes], Tuple[int, int]],
     sig2: Tuple[List[bytes], Tuple[int, int]],
     pixel_threshold: int = 16,
-) -> float:
-    """Calculate the maximum fraction of differing pixels across any tile (max tile difference).
-    A pixel differs if abs(p1 - p2) > pixel_threshold (default 16). Returns float in range [0.0, 1.0]."""
+) -> Tuple[float, float, float]:
+    """Calculate (max_tile_diff, mean_tile_diff, changed_tiles_ratio).
+    - max_tile_diff: maximum fraction of differing pixels across any single tile (range 0.0 to 1.0).
+    - mean_tile_diff: average fraction of differing pixels across all tiles (range 0.0 to 1.0).
+    - changed_tiles_ratio: fraction of tiles having >= 8% differing pixels (range 0.0 to 1.0).
+    """
     tiles1, size1 = sig1
     tiles2, size2 = sig2
     if size1 != size2 or len(tiles1) != len(tiles2) or len(tiles1) == 0:
-        return 1.0
+        return 1.0, 1.0, 1.0
 
     max_diff = 0.0
+    diff_sum = 0.0
+    changed_tiles = 0
     for t1, t2 in zip(tiles1, tiles2):
         if not t1:
             continue
@@ -188,7 +193,23 @@ def calculate_frame_difference(
         ratio = diff_count / len(t1)
         if ratio > max_diff:
             max_diff = ratio
-    return max_diff
+        diff_sum += ratio
+        if ratio >= 0.08:
+            changed_tiles += 1
+
+    total = len(tiles1)
+    mean_diff = diff_sum / total
+    changed_ratio = changed_tiles / total
+    return max_diff, mean_diff, changed_ratio
+
+
+def calculate_frame_difference(
+    sig1: Tuple[List[bytes], Tuple[int, int]],
+    sig2: Tuple[List[bytes], Tuple[int, int]],
+    pixel_threshold: int = 16,
+) -> float:
+    """Calculate the maximum fraction of differing pixels across any tile (max tile difference)."""
+    return calculate_frame_metrics(sig1, sig2, pixel_threshold)[0]
 
 
 def deduplicate_frames(
@@ -256,6 +277,54 @@ def deduplicate_frames(
                 pass
 
     return (kept, diff_records) if return_stats else kept
+
+
+def select_capped_frames(
+    frames: List[Tuple[float, str]],
+    effective_max: int,
+    duration: float,
+) -> List[Tuple[float, str]]:
+    """Greedily select effective_max frames balancing visual shift, temporal gap, and suppression of tight clusters."""
+    if len(frames) <= effective_max:
+        return list(frames)
+    if effective_max <= 1:
+        return [frames[0]]
+    if effective_max == 2:
+        return [frames[0], frames[-1]]
+
+    sigs = [compute_frame_signature(item[1]) for item in frames]
+    vis_scores = [0.0]
+    for i in range(1, len(frames)):
+        _, mean_d, ch_ratio = calculate_frame_metrics(sigs[i - 1], sigs[i]) if (sigs[i - 1] and sigs[i]) else (1.0, 1.0, 1.0)
+        score = 0.5 * mean_d + 0.5 * ch_ratio
+        vis_scores.append(score)
+
+    min_gap = max(0.5, duration / (2.0 * effective_max))
+    chosen = {0, len(frames) - 1}
+
+    while len(chosen) < effective_max:
+        candidates = [i for i in range(1, len(frames) - 1) if i not in chosen]
+        if not candidates:
+            break
+        best_cand = None
+        best_eff_score = -1e9
+        for c in candidates:
+            c_pts = frames[c][0]
+            min_dist = min(abs(c_pts - frames[sel][0]) for sel in chosen)
+            base_score = vis_scores[c]
+            if min_dist < min_gap:
+                eff_score = base_score * (min_dist / min_gap)
+            else:
+                eff_score = base_score + 0.2 * (min_dist / max(1.0, duration))
+            if eff_score > best_eff_score:
+                best_eff_score = eff_score
+                best_cand = c
+        if best_cand is not None:
+            chosen.add(best_cand)
+        else:
+            break
+
+    return [frames[i] for i in sorted(chosen)]
 
 
 def sanitize_stderr(stderr_text: str) -> str:
@@ -385,31 +454,12 @@ def extract_keyframes(
     # Cap to effective_max if needed, choosing frames with highest visual transition diff
     if len(filtered) > effective_max:
         dropped_by_cap = len(filtered) - effective_max
-        if effective_max == 1:
-            to_keep_indices = {0}
-        elif effective_max == 2:
-            to_keep_indices = {0, len(filtered) - 1}
-        else:
-            # Score interior candidates by difference from previous frame
-            interior_scores = []
-            for i in range(1, len(filtered) - 1):
-                prev_sig = compute_frame_signature(filtered[i - 1][1])
-                curr_sig = compute_frame_signature(filtered[i][1])
-                diff_val = calculate_frame_difference(prev_sig, curr_sig) if (prev_sig and curr_sig) else 1.0
-                interior_scores.append((diff_val, i))
-
-            # Pick top (effective_max - 2) interior candidates with highest difference
-            interior_scores.sort(key=lambda x: (-x[0], x[1]))
-            selected_interior = [idx for _, idx in interior_scores[:(effective_max - 2)]]
-            to_keep_indices = {0, len(filtered) - 1}.union(selected_interior)
-
-        selected_frames = []
-        for i, item in enumerate(filtered):
-            if i in to_keep_indices:
-                selected_frames.append(item)
-            else:
+        selected_frames = select_capped_frames(filtered, effective_max, duration)
+        selected_paths = {p for _, p in selected_frames}
+        for _, p in filtered:
+            if p not in selected_paths:
                 try:
-                    os.remove(item[1])
+                    os.remove(p)
                 except OSError:
                     pass
         filtered = selected_frames

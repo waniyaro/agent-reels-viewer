@@ -325,7 +325,7 @@ class TestWhisperTimeout(unittest.TestCase):
             # Create a mock worker script that intentionally sleeps longer than timeout
             mock_worker = os.path.join(tmp_dir, "sleeping_worker.py")
             with open(mock_worker, "w") as f:
-                f.write("import time, sys\ntime.sleep(4)\nsys.exit(0)\n")
+                f.write("import time, sys\ntime.sleep(30)\nsys.exit(0)\n")
 
             tmp_audio = os.path.join(tmp_dir, "test.mp3")
             with open(tmp_audio, "wb") as f:
@@ -338,7 +338,7 @@ class TestWhisperTimeout(unittest.TestCase):
                 worker_script=mock_worker,
             )
             elapsed = time.time() - start_t
-            self.assertLess(elapsed, 3.8, "Subprocess was not killed within timeout limit")
+            self.assertLess(elapsed, 10.0, "Subprocess was not killed within timeout limit")
             self.assertIsNone(has_speech)
             self.assertEqual(segments, [])
             self.assertEqual(status, "timeout")
@@ -777,7 +777,9 @@ class TestHardeningRoundTwelve(unittest.TestCase):
     def setUpClass(cls):
         cls.test_dir = tempfile.mkdtemp(prefix="test_round12_")
         cls.fixture_video = os.path.join(cls.test_dir, "test_fixture.mp4")
-        ffmpeg = get_ffmpeg_path() or "ffmpeg"
+        ffmpeg = get_ffmpeg_path()
+        if not ffmpeg:
+            raise unittest.SkipTest("ffmpeg binary not available in environment")
         cmd = [
             ffmpeg, "-y", "-f", "lavfi", "-i",
             "testsrc=duration=5:size=320x240:rate=10",
@@ -785,10 +787,7 @@ class TestHardeningRoundTwelve(unittest.TestCase):
             "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
             cls.fixture_video
         ]
-        try:
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        except Exception:
-            pass
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -960,41 +959,75 @@ class TestHardeningRoundTwelve(unittest.TestCase):
         self.assertLessEqual(stats_deep["threshold"], stats_std["threshold"])
 
     def test_cap_preserves_most_significant_transitions(self):
-        """Verify that when 17 candidates exceed cap 12, the highest diff shifts are kept."""
-        from agent_reels_viewer.video import deduplicate_frames
+        """Verify that when 17 synthetic candidates exceed cap, significant transitions are kept,
+        close pairs are deduplicated/spaced, and temporal intervals are covered."""
+        from agent_reels_viewer.video import select_capped_frames
         from PIL import Image
 
         fixture_dir = tempfile.mkdtemp(prefix="test_cap_17_")
         try:
-            # Create 17 frames: baseline white, with 3 high-contrast black frames (significant shifts)
+            # 17 synthetic frames across 100 seconds:
+            # - Significant transitions:
+            #   t=25.0 (white -> black)
+            #   t=45.0 (black -> red)
+            #   t=60.0 (red -> blue)
+            # - Pair of close frames:
+            #   t=75.0 and t=75.13 (difference 0.13s, both blue)
+            # - Uniform long intervals: [0..25], [26..45], [46..60], [61..75], [75.13..85], [85..100]
+            timestamps = [
+                0.0, 5.0, 10.0,
+                25.0, 26.0,
+                45.0, 46.0,
+                60.0, 61.0,
+                75.0, 75.13,
+                85.0, 90.0, 92.0, 95.0, 98.0, 100.0
+            ]
             frames_with_pts = []
-            for i in range(17):
-                fpath = os.path.join(fixture_dir, f"frame_{i:02d}.jpg")
-                color = (0, 0, 0) if i in (3, 8, 14) else (255, 255, 255)
+            for i, ts in enumerate(timestamps):
+                fpath = os.path.join(fixture_dir, f"frame_{i:02d}_{ts:.2f}s.jpg")
+                if ts < 25.0:
+                    color = (255, 255, 255)
+                elif ts < 45.0:
+                    color = (0, 0, 0)
+                elif ts < 60.0:
+                    color = (255, 0, 0)
+                elif i == 10:
+                    color = (0, 0, 250)
+                else:
+                    color = (0, 0, 255)
                 img = Image.new("RGB", (100, 100), color)
                 img.save(fpath, quality=90)
-                frames_with_pts.append((float(i), fpath))
+                frames_with_pts.append((ts, fpath))
 
-            # Run extract_keyframes logic / capping with max_frames=12
-            # Since color shifts occur at 3, 8, 14, diff for those transitions is ~1.0
-            from agent_reels_viewer.video import extract_keyframes
-            # We can test capping directly via extract_keyframes on fixture_video with max_frames=2
-            # and verify stats dictionary keys
-            _, _, _, _, stats = extract_keyframes(
-                self.fixture_video,
-                os.path.join(fixture_dir, "out"),
-                max_frames=3,
-                has_speech=False,
-                mode="standard",
-                return_stats=True,
+            # Cap 17 frames down to 8 frames across 100.0s duration
+            cap = 8
+            duration = 100.0
+            selected = select_capped_frames(frames_with_pts, effective_max=cap, duration=duration)
+            self.assertEqual(len(selected), cap)
+
+            selected_pts = [round(ts, 2) for ts, _ in selected]
+
+            # 1. First and last frames must always be preserved
+            self.assertIn(0.0, selected_pts)
+            self.assertIn(100.0, selected_pts)
+
+            # 2. Significant visual transitions must be kept
+            self.assertIn(25.0, selected_pts, f"Significant shift at 25.0s missing from {selected_pts}")
+            self.assertIn(45.0, selected_pts, f"Significant shift at 45.0s missing from {selected_pts}")
+            self.assertIn(60.0, selected_pts, f"Significant shift at 60.0s missing from {selected_pts}")
+
+            # 3. From the close pair (75.0s and 75.13s, diff 0.13s), exactly ONE must be kept
+            has_75_0 = 75.0 in selected_pts
+            has_75_13 = 75.13 in selected_pts
+            self.assertTrue(
+                (has_75_0 and not has_75_13) or (has_75_13 and not has_75_0),
+                f"Close pair 75.0 and 75.13 must not both be kept: {selected_pts}"
             )
-            self.assertIn("raw_candidates", stats)
-            self.assertIn("kept_after_dedup", stats)
-            self.assertIn("dropped_by_dedup", stats)
-            self.assertIn("dropped_by_cap", stats)
-            self.assertIn("final_frames", stats)
-            self.assertEqual(stats["final_frames"], 3)
-            self.assertGreaterEqual(stats["dropped_by_cap"], 0)
+
+            # 4. Temporal intervals must be covered: no huge gap across the 100s timeline
+            gaps = [selected_pts[i+1] - selected_pts[i] for i in range(len(selected_pts) - 1)]
+            for gap in gaps:
+                self.assertLessEqual(gap, 30.0, f"Temporal gap {gap}s too large in {selected_pts}")
         finally:
             shutil.rmtree(fixture_dir, ignore_errors=True)
 

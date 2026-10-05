@@ -187,8 +187,8 @@ ln -s "$(pwd)" ~/.claude/skills/agent-reels-viewer
 | **TikTok Videos** | **Partially Verified (1 clip tested)** | Tested locally on 1 TikTok clip (`7106594312292453675`, 24s). Music-only track correctly detected by VAD (`has_speech: false`). |
 | **Instagram Reels** | **Unverified with Cookies** | Missing cookies error handling is verified (`NEEDS_COOKIES`); extraction with real user cookies has not been verified. |
 | **Second-Pass Zoom (`frames`)** | **Verified** | Tested locally on both downloaded video sessions and local file sessions (`--from-sec` / `--to-sec`). |
-| **Environment & OS Support** | **macOS verified locally; CI pending** | Verified locally on macOS ARM64 (Python 3.14). Multi-platform workflow configured for Ubuntu, Windows, and macOS (Python 3.10–3.13); результаты CI ещё не получены. |
-| **Windows Execution** | **Не проверено (результаты CI ещё не получены)** | Windows environment has not been tested locally; CI run pending. |
+| **Linux & macOS (Py 3.10–3.13)** | **CI зелёный** | CI зелёный (2026-10-05): все 8 матричных конфигураций на Ubuntu и macOS (Python 3.10, 3.11, 3.12, 3.13) успешно прошли unit-тесты: [Run 37271994593](https://github.com/waniyaro/agent-reels-viewer/actions/runs/37271994593). |
+| **Windows Execution** | **Windows: падает на unit-тестах в CI, причина выясняется** | Шаг Run Doctor проходит (ffmpeg обнаружен), но unit-тесты падают в CI на всех 4 версиях Python (3.10–3.13). Причина выясняется по логам runner. |
 
 > **Note on CI Live Canary**: Social platforms like YouTube and Instagram aggressively challenge data center IPs (such as GitHub Actions runners). In CI, the `live-canary` job is configured with `continue-on-error: true` so data center IP blocks do not fail build validation.
 
