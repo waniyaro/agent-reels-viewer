@@ -17,11 +17,18 @@ This document tracks planned features, improvements, and architectural milestone
 ### 2. OCR Pre-Filtering (Local Optical Character Recognition)
 - Lightweight fast OCR (e.g. `rapidocr` or `tesseract`) to automatically tag keyframes containing code snippets or large header text.
 
-### 3. Multi-Clip Batching & TikTok Collection Importer (`tiktok-to-ytdlp`)
-- **Context**: Users often organize research, tutorials, and inspiration into private "Saved" folders and Collections in TikTok and Instagram. Directly scraping authenticated private collections is anti-bot heavy, but browser extractors like [tiktok-to-ytdlp](https://github.com/dinoosauro/tiktok-to-ytdlp) cleanly export lists of URLs from TikTok Collections, Favorites, and Profiles to text files.
+### 3. Universal Multi-Clip Batching: YouTube Playlists & Social Collections (Reels / TikTok / Shorts)
+- **Context**: Users want to research topics across multiple clips at once rather than one-by-one:
+  - **YouTube Playlists**: Direct playlist URLs (`youtube.com/playlist?list=...`) or channel Shorts feeds.
+  - **TikTok Collections**: Private folders and favorites exported via tools like [tiktok-to-ytdlp](https://github.com/dinoosauro/tiktok-to-ytdlp).
+  - **Instagram Reels Collections**: Saved collections exported from browser sessions into link lists.
+  - **Mixed Link Lists**: Plain text files with arbitrary combinations of Reels, TikToks, Shorts, and local `.mp4` clips.
 - **Goal**:
-  - Add `--batch <file.txt|urls.json>` flag to `agent-reels-viewer inspect` to process entire collections in sequence.
-  - Add `--limit <N>` to sample the top N clips from large folders.
-  - Generate a unified synthesized artifact (`collection_summary.md`) compiling keyframes, transcripts, and takeaways across all clips in the collection.
-  - Document zero-friction workflow pairing `tiktok-to-ytdlp` exports with `agent-reels-viewer`.
+  - **Native Playlist Support**: Automatically detect YouTube & TikTok playlist URLs and unroll items (`--limit <N>`, default 5).
+  - **Universal Batch Mode**: `--batch <links.txt>` processing URLs in order with graceful per-item error handling (continue-on-error).
+  - **Unified Collection Artifact (`collection_summary.md`)**:
+    - Cross-clip summary with key takeaways.
+    - Side-by-side or chronological index with direct links to individual session timelines (`timeline.md`) and keyframes.
+    - Token budget guardrails so batch runs do not overwhelm the host agent's context.
   - Tracked in: [GitHub Issue #2](https://github.com/waniyaro/agent-reels-viewer/issues/2).
+
