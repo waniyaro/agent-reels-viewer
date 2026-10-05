@@ -390,6 +390,24 @@ class TestTimelineAssembly(unittest.TestCase):
             c = f.read()
             self.assertIn("Speech analysis timed out", c)
 
+    def test_timeline_cross_drive_windows_mount(self):
+        """Verify assemble_timeline handles cross-drive mounts on Windows without ValueError."""
+        with patch("os.path.relpath", side_effect=ValueError("path is on mount 'D:', start on mount 'C:'")):
+            meta = {"uploader": "test", "duration": 5.0}
+            keyframes = [(1.0, "D:\\workspace\\frame_01.jpg")]
+            t_path = assemble_timeline(
+                output_dir=self.temp_dir,
+                meta=meta,
+                keyframes=keyframes,
+                speech_segments=[],
+                has_speech=False,
+                transcription_status="None",
+                speech_status="none",
+            )
+            with open(t_path, encoding="utf-8") as f:
+                content = f.read()
+            self.assertIn("D:/workspace/frame_01.jpg", content)
+
     def test_timeline_speech_status_error(self):
         meta = {"title": "Error Video", "uploader": "user", "webpage_url": "https://youtube.com/shorts/3", "duration": 15}
         path = assemble_timeline(self.temp_dir, meta, [], [], None, "module not found", speech_status="error")
@@ -921,7 +939,7 @@ class TestHardeningRoundTwelve(unittest.TestCase):
             {"start": 1.0, "end": 2.5, "text": "Testing speech transcript line"}
         ]
         meta = {"uploader": "test_creator", "duration": 5.0}
-        keyframes = [(1.5, "frame_01.jpg")]
+        keyframes = [(1.5, os.path.join(self.test_dir, "frame_01.jpg"))]
         t_path = assemble_timeline(
             output_dir=self.test_dir,
             meta=meta,

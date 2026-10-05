@@ -79,7 +79,12 @@ def assemble_timeline(
     # Combine keyframes and transcript events sorted by timestamp
     events = []
     for ts, fpath in keyframes:
-        rel_fpath = os.path.relpath(fpath, output_dir)
+        try:
+            rel_fpath = os.path.relpath(fpath, output_dir)
+        except ValueError:
+            # Handle Windows cross-drive mounts (e.g. workspace on D: and temp on C:)
+            rel_fpath = fpath
+        rel_fpath = rel_fpath.replace("\\", "/")
         events.append({
             "type": "frame",
             "time": ts,

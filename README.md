@@ -188,7 +188,7 @@ ln -s "$(pwd)" ~/.claude/skills/agent-reels-viewer
 | **Instagram Reels** | **Unverified with Cookies** | Missing cookies error handling is verified (`NEEDS_COOKIES`); extraction with real user cookies has not been verified. |
 | **Second-Pass Zoom (`frames`)** | **Verified** | Tested locally on both downloaded video sessions and local file sessions (`--from-sec` / `--to-sec`). |
 | **Linux & macOS (Py 3.10–3.13)** | **CI зелёный** | CI зелёный (2026-10-05): все 8 матричных конфигураций на Ubuntu и macOS (Python 3.10, 3.11, 3.12, 3.13) успешно прошли unit-тесты: [Run 37271994593](https://github.com/waniyaro/agent-reels-viewer/actions/runs/37271994593). |
-| **Windows Execution** | **Windows: падает на unit-тестах в CI, причина выясняется** | Шаг Run Doctor проходит (ffmpeg обнаружен), но unit-тесты падают в CI на всех 4 версиях Python (3.10–3.13). Причина выясняется по логам runner. |
+| **Windows Execution** | **Исправлено (ожидает подтверждения в CI)** | Причина падения в CI локализована по логу runner: кросс-дисковый `ValueError: path is on mount 'D:', start on mount 'C:'` в `ntpath.relpath`. Добавлен перехват кросс-дисковых маунтов и нормализация слешей для markdown на Windows. |
 
 > **Note on CI Live Canary**: Social platforms like YouTube and Instagram aggressively challenge data center IPs (such as GitHub Actions runners). In CI, the `live-canary` job is configured with `continue-on-error: true` so data center IP blocks do not fail build validation.
 
